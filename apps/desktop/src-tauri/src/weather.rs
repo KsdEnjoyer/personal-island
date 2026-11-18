@@ -295,10 +295,18 @@ pub async fn get_weather(
 }
 #[tauri::command]
 pub fn open_weather_source() -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    std::process::Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", "https://open-meteo.com/"])
-        .creation_flags(0x08000000)
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", "https://open-meteo.com/"])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg("https://open-meteo.com/")
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())

@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 use tauri::{Emitter, Manager};
+#[cfg(windows)]
 use windows::{
     core::w,
     Win32::{
@@ -97,7 +98,7 @@ impl ClipboardState {
         Ok(Self {
             pool,
             enabled: AtomicBool::new(enabled.unwrap_or(false)),
-            sequence: AtomicU32::new(unsafe { GetClipboardSequenceNumber() }),
+            sequence: AtomicU32::new(clipboard_sequence()),
             gate: Mutex::new(()),
         })
     }
@@ -293,6 +294,7 @@ impl ClipboardState {
 }
 
 // Respect common password-manager opt-out markers before reading payloads.
+#[cfg(windows)]
 fn excluded() -> bool {
     unsafe {
         for name in [
@@ -322,6 +324,17 @@ fn excluded() -> bool {
     false
 }
 
+#[cfg(windows)]
+fn clipboard_sequence() -> u32 {
+    unsafe { GetClipboardSequenceNumber() }
+}
+
+#[cfg(target_os = "linux")]
+fn clipboard_sequence() -> u32 {
+    0
+}
+
+#[cfg(windows)]
 pub fn start_monitor(app: tauri::AppHandle, state: Arc<ClipboardState>) {
     std::thread::spawn(move || {
         let mut clipboard = match arboard::Clipboard::new() {
@@ -374,6 +387,86 @@ pub fn start_monitor(app: tauri::AppHandle, state: Arc<ClipboardState>) {
     });
 }
 
+#[cfg(target_os = "linux")]
+pub fn start_monitor(app: tauri::AppHandle, state: Arc<ClipboardState>) {
+    std::thread::spawn(move || {
+        let mut clipboard = match arboard::Clipboard::new() {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Clipboard unavailable: {error}");
+                return;
+            }
+        };
+        let mut previous = None;
+        let mut was_enabled = false;
+        let mut last_epoch = state.sequence.load(Ordering::SeqCst);
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            if app.get_webview_window("main").is_none() {
+                break;
+            }
+            let Ok(_guard) = state.gate.lock() else { break };
+            let epoch = state.sequence.load(Ordering::SeqCst);
+            if epoch != last_epoch {
+                previous = None;
+                was_enabled = false;
+                last_epoch = epoch;
+            }
+            let enabled = state.enabled.load(Ordering::SeqCst);
+            if !enabled {
+                was_enabled = false;
+                previous = None;
+                continue;
+            }
+            let content = if let Ok(Some(files)) = crate::clipboard_formats::read_files() {
+                if files.is_empty() {
+                    continue;
+                }
+                let bytes = serde_json::to_vec(&files).unwrap_or_default();
+                Some(("files", bytes, Some(files), None, None))
+            } else if let Ok(Some(png)) = crate::clipboard_formats::read_png() {
+                Some(("image", png.clone(), None, None, Some(png)))
+            } else if let Ok(image) = clipboard.get_image() {
+                Some(("image", image.bytes.to_vec(), None, Some(image), None))
+            } else if let Ok(text) = clipboard.get_text() {
+                Some(("text", text.as_bytes().to_vec(), None, None, None))
+            } else {
+                None
+            };
+            let Some((kind, bytes, files, image, png)) = content else {
+                continue;
+            };
+            let mut digest = Sha256::new();
+            digest.update(kind);
+            digest.update(&bytes);
+            let hash: [u8; 32] = digest.finalize().into();
+            if !was_enabled {
+                was_enabled = true;
+                previous = Some(hash);
+                continue;
+            }
+            if previous == Some(hash) {
+                continue;
+            }
+            let result = if let Some(files) = files {
+                tauri::async_runtime::block_on(state.save_files(files))
+            } else if let Some(png) = png {
+                tauri::async_runtime::block_on(state.save_png(png))
+            } else if let Some(image) = image {
+                tauri::async_runtime::block_on(state.save_image(image))
+            } else {
+                tauri::async_runtime::block_on(state.save_text(&String::from_utf8_lossy(&bytes)))
+            };
+            if let Err(error) = result {
+                eprintln!("Clipboard capture failed: {error}");
+            } else {
+                previous = Some(hash);
+                let _ = app.emit("clipboard-changed", ());
+            }
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn list_clipboard(
     state: tauri::State<'_, Arc<ClipboardState>>,
@@ -393,9 +486,10 @@ pub async fn set_clipboard_enabled(
 ) -> Result<(), String> {
     sqlx::query("INSERT INTO clipboard_settings(id,enabled) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled").bind(enabled).execute(&state.pool).await.map_err(|e|e.to_string())?;
     let _guard = state.gate.lock().map_err(|_| "Буфер занят")?;
-    state
-        .sequence
-        .store(unsafe { GetClipboardSequenceNumber() }, Ordering::SeqCst);
+    #[cfg(windows)]
+    state.sequence.store(clipboard_sequence(), Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    state.sequence.fetch_add(1, Ordering::SeqCst);
     state.enabled.store(enabled, Ordering::SeqCst);
     Ok(())
 }
@@ -447,7 +541,7 @@ pub async fn copy_clipboard_entry(
     state: tauri::State<'_, Arc<ClipboardState>>,
     target: tauri::State<'_, Arc<crate::platform::PasteTarget>>,
     id: i64,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let row: (String, Option<String>, Option<Vec<u8>>) =
         sqlx::query_as("SELECT kind,text,payload FROM clipboard_history WHERE id=?")
             .bind(id)
@@ -457,7 +551,12 @@ pub async fn copy_clipboard_entry(
             .ok_or("Запись уже удалена")?;
     let state = state.inner().clone();
     let target = target.inner().clone();
+    #[cfg(windows)]
     let owner = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    #[cfg(target_os = "linux")]
+    let owner = 0;
+    #[cfg(target_os = "linux")]
+    let _ = window;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = state.gate.lock().map_err(|_| "Буфер занят")?;
         let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
@@ -483,13 +582,20 @@ pub async fn copy_clipboard_entry(
         } else {
             return Err("Неизвестный формат записи".into());
         }
-        state
-            .sequence
-            .store(unsafe { GetClipboardSequenceNumber() }, Ordering::SeqCst);
-        target.prepare()
+        #[cfg(windows)]
+        state.sequence.store(clipboard_sequence(), Ordering::SeqCst);
+        #[cfg(target_os = "linux")]
+        state.sequence.fetch_add(1, Ordering::SeqCst);
+        #[cfg(windows)]
+        target.prepare()?;
+        Ok::<(), String>(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    #[cfg(windows)]
+    return Ok(true);
+    #[cfg(target_os = "linux")]
+    return Ok(target.prepare().await);
 }
 
 #[cfg(test)]
@@ -625,7 +731,7 @@ mod tests {
         let state = ClipboardState::open(&temp.path().join("history.sqlite3"))
             .await
             .unwrap();
-        let pixels = vec![31, 84, 120, 255].repeat(12);
+        let pixels = [31, 84, 120, 255].repeat(12);
         state
             .save_image(arboard::ImageData {
                 width: 4,

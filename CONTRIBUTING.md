@@ -7,7 +7,7 @@ reminder acknowledgements. Do not silently delete or complete user tasks.
 
 ## Development
 
-Windows desktop prerequisites and startup are in [README](README.md).
+Windows and Linux desktop prerequisites and startup are in [README](README.md).
 Use `npm ci`, the committed Cargo/npm lockfiles and the Rust toolchain file.
 Changes to credentials, authorization, clipboard capture or native automation
 need explicit tests of the denied/disabled path as well as the working path.
@@ -20,7 +20,7 @@ npm.cmd --prefix apps/desktop run check
 npm.cmd --prefix apps/desktop run build
 ```
 
-On Windows also run `cargo test --locked -p personal-island-desktop --lib`.
+On Windows and Linux also run `cargo test --locked -p personal-island-desktop --lib`.
 Python gateway tests:
 
 ```powershell

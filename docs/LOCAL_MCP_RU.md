@@ -14,8 +14,8 @@ MCP подключает инструменты к AI-клиенту. Здесь
 cargo build --locked --release -p task-mcp
 ```
 
-На Windows получится `target/release/task-mcp.exe`. stdio-сервер можно собирать
-и на Linux/macOS как `target/release/task-mcp`, отдельно от Windows-приложения.
+На Windows получится `target/release/task-mcp.exe`, на Linux/macOS —
+`target/release/task-mcp`. На Linux он работает с тем же настольным приложением.
 У него нет сетевого listener или собственного интерфейса.
 
 ## 2. Подключение клиента
@@ -87,7 +87,8 @@ MCP отдельный `PERSONAL_ISLAND_DB`, например:
 
 Тестовые задачи появятся в основном островке только если он использует тот же
 путь. Для обычной работы убери переопределение с обеих сторон: Windows
-использует `%LOCALAPPDATA%\PersonalIsland\tasks.sqlite3`.
+использует `%LOCALAPPDATA%\PersonalIsland\tasks.sqlite3`, на Linux —
+`$XDG_DATA_HOME/PersonalIsland/tasks.sqlite3` (обычно в `~/.local/share`).
 Каталог базы должен быть доступен только нужной учётной записи.
 
 ## Инструменты

@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "targets": ["deb", "appimage"],
+    "icon": ["icons/icon.png"],
+    "linux": {
+      "deb": {
+        "depends": ["playerctl", "pulseaudio-utils", "wl-clipboard", "xclip", "libglib2.0-bin", "xdg-utils"],
+        "files": {
+          "/usr/share/applications/dev.personalisland.desktop.desktop": "linux/dev.personalisland.desktop.desktop"
+        }
+      }
+    }
+  }
+}

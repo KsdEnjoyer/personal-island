@@ -1,6 +1,6 @@
 # Codex instructions for Personal Island
 
-This is a personal tasks desktop application for Windows 10/11, built with Rust + Tauri 2 + Svelte.
+This is a personal tasks desktop application for Windows 10/11 and Linux, built with Rust + Tauri 2 + Svelte.
 
 ## Workspace
 - `crates/task-core`: shared task and SQLite logic (single source of truth).
@@ -20,3 +20,4 @@ This is a personal tasks desktop application for Windows 10/11, built with Rust 
 - Run `cargo test -p task-core` and `cargo check -p task-mcp` for Rust changes.
 - Build Svelte using `npm run build` from `apps/desktop`.
 - On Windows run Tauri with `npm run tauri dev` from `apps/desktop`.
+- On Linux run Tauri with `npm run tauri -- dev` from `apps/desktop`.

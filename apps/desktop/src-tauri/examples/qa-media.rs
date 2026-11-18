@@ -1,4 +1,5 @@
 //! Silent, local test player with three real system-controllable tracks.
+#[cfg(windows)]
 use windows::{
     core::HSTRING,
     Foundation::Uri,
@@ -10,6 +11,7 @@ use windows::{
     Storage::{StorageFile, Streams::RandomAccessStreamReference},
     Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED},
 };
+#[cfg(windows)]
 fn main() -> windows::core::Result<()> {
     unsafe {
         RoInitialize(RO_INIT_MULTITHREADED)?;
@@ -64,6 +66,12 @@ fn main() -> windows::core::Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("qa-media is a Windows-only QA fixture");
+}
+
+#[cfg(windows)]
 fn mute_audio_session() -> windows::core::Result<()> {
     use windows::{
         core::Interface,

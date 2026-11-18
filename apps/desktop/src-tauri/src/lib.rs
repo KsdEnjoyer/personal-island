@@ -1,16 +1,45 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use task_core::{NewTask, Task, TaskPatch, TaskStore};
 use tauri::{Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size};
+#[cfg(windows)]
+mod audio_reactivity;
+#[cfg(target_os = "linux")]
+#[path = "audio_reactivity_linux.rs"]
 mod audio_reactivity;
 mod clipboard;
+#[cfg(windows)]
 mod clipboard_formats;
+#[cfg(target_os = "linux")]
+#[path = "clipboard_formats_linux.rs"]
+mod clipboard_formats;
+#[cfg(windows)]
 mod keyboard;
+#[cfg(target_os = "linux")]
+#[path = "keyboard_linux.rs"]
+mod keyboard;
+#[cfg(windows)]
 mod media;
+#[cfg(target_os = "linux")]
+#[path = "media_linux.rs"]
+mod media;
+#[cfg(windows)]
 mod music_start;
 mod notes;
+#[cfg(windows)]
 mod platform;
+#[cfg(target_os = "linux")]
+#[path = "platform_linux.rs"]
+mod platform;
+#[cfg(target_os = "linux")]
+mod portal_identity_linux;
+#[cfg(windows)]
+mod volume;
+#[cfg(target_os = "linux")]
+#[path = "volume_linux.rs"]
 mod volume;
 mod weather;
+#[cfg(target_os = "linux")]
+mod x11_linux;
 use platform::PasteTarget;
 use std::sync::Arc;
 
@@ -442,13 +471,25 @@ fn exit_app(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn get_platform_capabilities() -> serde_json::Value {
+    serde_json::json!({"automaticPaste": cfg!(windows) || cfg!(target_os = "linux")})
+}
+
+#[tauri::command]
 async fn paste_to_previous_window(
     target: tauri::State<'_, Arc<PasteTarget>>,
 ) -> Result<(), String> {
     let target = target.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || target.paste())
-        .await
-        .map_err(|e| e.to_string())?
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || target.paste())
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(target_os = "linux")]
+    {
+        target.paste().await
+    }
 }
 
 // Native events keep the five-second lease reliable even when an unfocused
@@ -458,6 +499,7 @@ async fn pointer_loop(app: tauri::AppHandle) {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         ticker.tick().await;
+        #[cfg(windows)]
         app.state::<Arc<PasteTarget>>().remember_foreground();
         let Some(window) = app.get_webview_window("main") else {
             break;
@@ -483,13 +525,6 @@ async fn pointer_loop(app: tauri::AppHandle) {
                 w - 56.0
             } else if mode == 1 {
                 360.0
-            } else if mode == 0
-                && app
-                    .state::<IslandPresentation>()
-                    .portrait
-                    .load(Ordering::SeqCst)
-            {
-                272.0
             } else {
                 272.0
             };
@@ -731,7 +766,8 @@ pub fn run() {
             media::start_yandex_music,
             weather::get_weather,
             weather::open_weather_source,
-            exit_app
+            exit_app,
+            get_platform_capabilities
         ])
         .run(tauri::generate_context!())
         .expect("Failed to launch Personal Island");

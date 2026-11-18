@@ -53,6 +53,7 @@
   let nativeOutsideSince = 0;
   let shortcutEditing = false;
   let shortcutReady = false;
+  let automaticPaste = true;
   const REVEAL_MS = 5_000;
   const TRACK_REVEAL_MS = 3_000;
   let tab: Tab = 'home';
@@ -307,9 +308,10 @@
   async function pasteClipboard(id: number) {
     busy = true;
     try {
-      await invoke('copy_clipboard_entry', { id });
+      const automatic = await invoke<boolean>('copy_clipboard_entry', { id });
+      automaticPaste = automatic;
       await hideIsland(true);
-      await invoke('paste_to_previous_window');
+      if (automatic) await invoke('paste_to_previous_window');
     } catch (err) {
       visible = true;
       await openDashboard();
@@ -683,6 +685,9 @@
     }
   }
   onMount(() => {
+    void invoke<{automaticPaste: boolean}>('get_platform_capabilities')
+      .then(capabilities => automaticPaste = capabilities.automaticPaste)
+      .catch(() => {});
     const appearanceSettings = loadAppearance();
     appearance = appearanceSettings.style;
     liquidEnabled = appearanceSettings.liquid;
@@ -833,7 +838,7 @@
       {#if tab === 'home'}
         <HomePanel active={expanded && visible} {tasks} {now} {media} {mediaError} {weather} {focusSeconds} {focusTotalSeconds} {timerRunning} {shortcutReady} {pinned} {reducedMotion} {mediaBusy} navigate={selectTab} createTask={openComposer} toggleFocus={toggleTimer} addMinute={addFocusMinute} resetFocus={() => setFocusMinutes(focusMinutes)} mediaCommand={compactCommand} playMusic={playFromHome} openSettings={() => settingsOpen = true}/>
       {:else if tab === 'clipboard'}
-        <ClipboardPanel paste={pasteClipboard}/>
+        <ClipboardPanel paste={pasteClipboard} {automaticPaste}/>
       {:else if tab === 'music'}
         <MusicPanel {media} {mediaError} bind:preferred={preferredMedia} refresh={refreshMedia}/>
       {:else if tab === 'weather'}
