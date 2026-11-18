@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 # SQLx permits older SQLite bindings too; keep the patched bundled SQLite floor.
-libsqlite3-sys = { version = "0.39.1", default-features = false }
+libsqlite3-sys = { version = "0.40.0", default-features = false }
 anyhow.workspace = true
 chrono.workspace = true
 dirs.workspace = true
