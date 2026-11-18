@@ -1,0 +1,129 @@
+/* The mask and the workspace share one palette. Classic stays untouched. */
+.island-shell.capri-theme {
+  --surface: #111b16;
+  --muted: #8b9c91;
+  --amber: #38ed8b;
+  --capri-line: #2b4034;
+  --capri-pink: #ff5389;
+  color: #e4f4e9;
+  accent-color: var(--amber);
+}
+.island-shell.capri-theme ::selection { background:#285f44; color:#fff; }
+.island-shell.capri-theme :is(button,input,select,textarea):focus-visible { outline-color:var(--amber); }
+.island-shell.capri-theme .dashboard {
+  background:linear-gradient(145deg,#10251b66,transparent 42%),#080f0d;
+  border-radius:0 0 24px 24px;
+  box-shadow:inset 1px 0 #38ed8b28,inset -1px 0 #ff538924;
+}
+.island-shell.capri-theme .header {
+  position:relative;
+  border-bottom:1px solid #25372d;
+  height:39px;
+  padding-bottom:7px;
+  margin-bottom:12px;
+}
+.island-shell.capri-theme .header::after {
+  content:''; position:absolute; bottom:-1px; left:9px;
+  width:28px; height:2px; background:var(--capri-pink);
+}
+.island-shell.capri-theme .tabs { gap:5px; }
+.island-shell.capri-theme .tabs button { border-radius:9px; color:#8aab96; }
+.island-shell.capri-theme .tabs button:hover { background:#16271d; color:#e6ffef; }
+.island-shell.capri-theme .tabs button.active { background:#183c28; color:#80ffb5; box-shadow:inset 0 0 0 1px #38ed8b32; }
+.island-shell.capri-theme .header-actions .icon-button { border-radius:9px; color:#92a99b; }
+.island-shell.capri-theme .header-actions .icon-button.selected { background:#263425; color:#b8ffce; }
+.island-shell.capri-theme :is(.tasks-panel,.focus-panel,.utility-panel,.calendar-surface,.overview-card,.note-paper,.weather-hours,.weather-daily-card) {
+  background:var(--surface); border-radius:12px;
+  box-shadow:inset 0 0 0 1px var(--capri-line);
+}
+.island-shell.capri-theme .overview-card { color:#e2f3e8; }
+.island-shell.capri-theme button.overview-card:hover { background:#182b1e; }
+.island-shell.capri-theme .overview-card .card-title,.island-shell.capri-theme .overview-card .card-heading h2 { color:#a4c7b2; }
+.island-shell.capri-theme .overview-card .card-title > svg,.island-shell.capri-theme .overview-card .card-heading h2 > svg { color:#6be6a0; }
+.island-shell.capri-theme .overview-card:nth-child(2) { box-shadow:inset 0 0 0 1px #683347; background:#21161d; }
+.island-shell.capri-theme .overview-card:nth-child(2) .card-heading h2 { color:#f4aac1; }
+.island-shell.capri-theme .overview-card:nth-child(2) .focus-line strong { color:#ffb8d0; }
+.island-shell.capri-theme .task-stats b { color:#a6ffca; }
+.island-shell.capri-theme .task-stats .late b { color:#ff98b6; }
+.island-shell.capri-theme .nearest-task { border-color:#294032; color:#b0cabb; }
+.island-shell.capri-theme .nearest-task small { color:#bc9fa9; }
+.island-shell.capri-theme .start-focus { background:#ff8fb5; color:#270e1b; border-radius:8px; }
+.island-shell.capri-theme .focus-progress { background:#4c2939; }
+.island-shell.capri-theme .focus-progress i { background:#ff72a3; }
+.island-shell.capri-theme .card-heading > span.running { color:#ffb1ce; }
+.island-shell.capri-theme .launch-music { color:#b9ffd2; border-color:#387a50; background:#183522; }
+.island-shell.capri-theme .launch-music:hover { background:#225134; }
+.island-shell.capri-theme .weather-overview { background:#10231f; }
+.island-shell.capri-theme .weather-overview:hover { background:#16312a!important; }
+.island-shell.capri-theme .home-weather strong { color:#adf5d5; }
+.island-shell.capri-theme .home-weather > span { color:#abc9be; }
+.island-shell.capri-theme .widget-status { color:#7f9b8b; }
+.island-shell.capri-theme .widget-status kbd { border-color:#36503f; color:#b5dfc5; }
+.island-shell.capri-theme :is(.meta,.task-due,.notes-stats,.clipboard-stats) { color:#8b9e91; }
+.island-shell.capri-theme .task-due.overdue { color:#ff98b6; }
+.island-shell.capri-theme .task-item:hover { background:#1b2b21; }
+.island-shell.capri-theme .task-checkbox { border-color:#668c75; border-radius:5px; }
+.island-shell.capri-theme .task-checkbox.checked { color:#0b2414; }
+.island-shell.capri-theme :is(.add-task,.add-small,.empty-symbol) { background:#1b2d22; color:#9ed3b2; border-radius:8px; }
+.island-shell.capri-theme :is(.task-filters button.active,.note-sections button.active,.note-toolbar button.active) { background:#254932; color:#adffd0; }
+.island-shell.capri-theme .note-editor .tiptap { color:#dcefe0; caret-color:var(--amber); }
+.island-shell.capri-theme .note-editor .tiptap input[type=checkbox]:checked { background:var(--amber); border-color:var(--amber); }
+.island-shell.capri-theme .note-editor .tiptap blockquote { border-color:var(--capri-pink); }
+.island-shell.capri-theme .note-sections select { background:#102017; color:#9fbeaa; }
+.island-shell.capri-theme .timer-toggle { background:#274831; color:#c5ffda; border-radius:9px; }
+.island-shell.capri-theme .timer-secondary button { background:#1a2b20; color:#9fbbaa; border-radius:6px; }
+.island-shell.capri-theme .open-week-planner { background:#203c2a; color:#beebcd; }
+.island-shell.capri-theme .weather-city { border-radius:12px; box-shadow:inset 0 0 0 1px #5caa874a; }
+.island-shell.capri-theme .weather-empty { background:var(--surface); border-radius:12px; }
+.island-shell.capri-theme .calendar-dialog { background:#142219; border-color:#3c6148; }
+.island-shell.capri-theme .calendar-dialog :is(input,textarea,select) { background:#0a150f; border-color:#3c5744; color:#deefdf; }
+.island-shell.capri-theme .calendar-dialog .event-submit { background:var(--amber); color:#092112; }
+.island-shell.capri-theme .appearance-choice { background:#0d1912; border-color:#344d3d; }
+.island-shell.capri-theme .appearance-choice.chosen { background:#1c3927; border-color:#54b97a; }
+.island-shell.capri-theme .appearance-choice:focus-within { outline-color:var(--amber); }
+.island-shell.capri-theme .chosen .appearance-caption { color:#b6ffd1; }
+.island-shell.capri-theme .chosen .appearance-check { background:var(--amber); color:#0a2715; }
+.island-shell.capri-theme :is(.task-form,.inline-editor,.note-dialog,.calendar-filter-popover,.settings-panel) { background:#142219; border-color:#3c6148; }
+.island-shell.capri-theme .settings-panel { border-radius:12px; box-shadow:0 12px 32px #000b,inset 0 2px #ff5389; }
+.island-shell.capri-theme :is(.task-form input,.task-form textarea,.task-form select,.note-dialog input,.source-select select,.clipboard-search input,.note-select) {
+  background:#0a150f; color:#deefdf; border-color:#3c5744;
+}
+.island-shell.capri-theme :is(.submit-task,.remind-submit,.new-event) { background:#67ed9a; color:#092112; border-radius:8px; }
+.island-shell.capri-theme .calendar-day.today { color:#a7ffca; box-shadow:inset 0 0 0 1px #447a56; }
+.island-shell.capri-theme .month-calendar .calendar-day.selected { background:#285038; color:#c1ffdb; box-shadow:inset 0 0 0 1px #3f8c59; }
+.island-shell.capri-theme .month-calendar .calendar-day.selected i.has-tasks { background:#89ffb6; }
+.island-shell.capri-theme .calendar-week:has(.calendar-day:hover) { background:#38ed8b09; }
+.island-shell.capri-theme .week-heading button.chosen { background:#21412e; color:#b2ffd1; border-color:#45835b; }
+.island-shell.capri-theme .chosen-column { background:#38ed8b09; }
+.island-shell.capri-theme :is(.now-line,.now-dot,.time-badge) { background:#ff6b9d; }
+.island-shell.capri-theme .playback-controls button { background:#203e2b; color:#b4ffd1; }
+.island-shell.capri-theme .playback-controls .music-play { background:#69efa1; color:#0a2113; }
+.island-shell.capri-theme .music-progress { background:#274233; }
+.island-shell.capri-theme .music-progress i { background:#6aefa0; }
+.island-shell.capri-theme :is(.album-art,.empty-record) { background:#15291c; color:#79bf94; }
+.island-shell.capri-theme .clipboard-card { border-color:#304c3b; border-radius:9px; background:#14231a; }
+.island-shell.capri-theme .clipboard-card:hover { background:#1c3022; }
+.island-shell.capri-theme .clipboard-card.pinned { border-color:#6b4152; background:#241a21; }
+.island-shell.capri-theme .footer { color:#7b9386; }
+.island-shell.capri-theme .note-paper { color:#dbefe2; }
+.island-shell.capri-theme .note-title { color:#dff9e8; }
+.island-shell.capri-theme .note-editor .tiptap { color:#c4decf; caret-color:var(--amber); }
+.island-shell.capri-theme .note-editor .tiptap input[type=checkbox]:checked { background:var(--amber); border-color:var(--amber); }
+.island-shell.capri-theme .note-editor .tiptap blockquote { border-color:var(--capri-pink); color:#bfc5c0; }
+.island-shell.capri-theme .note-editor .tiptap mark { color:#e4ffd8; }
+.island-shell.capri-theme .clipboard-card { background:#142219; border-color:#2b4034; border-radius:10px; }
+.island-shell.capri-theme .clipboard-card.pinned { border-color:#568360; background:#1a2e20; }
+.island-shell.capri-theme .clipboard-card .file-symbol { background:#243b2a; color:#aff1bd; }
+.island-shell.capri-theme .playback-controls button { background:#233f2d; color:#c6ffdb; }
+.island-shell.capri-theme .playback-controls button:hover { background:#315d40; }
+.island-shell.capri-theme .playback-controls .play-button { background:#75f2a5; color:#0a2816; }
+.island-shell.capri-theme .weather-city { box-shadow:inset 0 0 0 1px #a9ffcf40; border-radius:12px; }
+.island-shell.capri-theme .weather-hours .hour.active { background:#284334; }
+.island-shell.capri-theme .footer { color:#759381; }
+.island-shell.capri-theme .home-transport .home-play {background:#75f2a5;color:#0a2816;}
+.island-shell.capri-theme .home-transport .home-play:hover {background:#a5ffc7;}
+.island-shell.capri-theme .clipboard-scopes button {background:#172a1f;color:#98bba6;}
+.island-shell.capri-theme .clipboard-scopes button.active {background:#2b5036;color:#c4ffda;}
+@media(prefers-reduced-motion:reduce) {
+  .island-shell.capri-theme * { scroll-behavior:auto; }
+}

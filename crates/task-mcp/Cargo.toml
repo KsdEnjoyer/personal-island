@@ -1,0 +1,29 @@
+[package]
+name = "task-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "task-mcp"
+
+[features]
+http = ["dep:axum", "dep:subtle", "rmcp/transport-streamable-http-server", "tokio/signal"]
+
+[[bin]]
+name = "task-mcp-http"
+path = "src/bin/http.rs"
+required-features = ["http"]
+
+[dependencies]
+anyhow.workspace = true
+rmcp = { version = "3.10", features = ["server", "macros", "schemars", "transport-io"] }
+chrono.workspace = true
+chrono-tz = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+task-core = { path = "../task-core" }
+tokio.workspace = true
+axum = { version = "0.8", optional = true }
+subtle = { version = "2.6", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

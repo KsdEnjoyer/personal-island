@@ -1,0 +1,7 @@
+{
+  "public_base": "https://island.example.com/island-mcp",
+  "database": "/var/lib/personal-island-mcp/oauth.sqlite3",
+  "session_secret": "",
+  "bridge_token": "",
+  "owner_password_hash": ""
+}

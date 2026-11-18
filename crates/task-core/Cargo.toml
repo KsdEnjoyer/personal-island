@@ -1,0 +1,19 @@
+[package]
+name = "task-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# SQLx permits older SQLite bindings too; keep the patched bundled SQLite floor.
+libsqlite3-sys = { version = "0.39.1", default-features = false }
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile = "3"

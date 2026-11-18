@@ -1,0 +1,8 @@
+{
+  "public_base": "https://island.example.com/island-mcp",
+  "ssh_host": "vps.example.com",
+  "ssh_user": "islandrelay",
+  "ssh_identity": "~/.ssh/personal_island_relay_ed25519",
+  "admin_target": "deploy@vps.example.com",
+  "admin_identity": "~/.ssh/id_ed25519"
+}

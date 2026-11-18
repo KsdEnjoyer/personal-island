@@ -1,0 +1,97 @@
+//! Silent, local test player with three real system-controllable tracks.
+use windows::{
+    core::HSTRING,
+    Foundation::Uri,
+    Media::{
+        Core::MediaSource,
+        MediaPlaybackType,
+        Playback::{MediaPlaybackItem, MediaPlaybackList, MediaPlayer},
+    },
+    Storage::{StorageFile, Streams::RandomAccessStreamReference},
+    Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED},
+};
+fn main() -> windows::core::Result<()> {
+    unsafe {
+        RoInitialize(RO_INIT_MULTITHREADED)?;
+    }
+    let folder = std::path::PathBuf::from(std::env::args().nth(1).expect("fixture folder"));
+    let cover = StorageFile::GetFileFromPathAsync(&HSTRING::from(
+        folder.join("cover.png").to_string_lossy().as_ref(),
+    ))?
+    .join()?;
+    let thumbnail = RandomAccessStreamReference::CreateFromFile(&cover)?;
+    let player = MediaPlayer::new()?;
+    player.SetVolume(0.0)?;
+    let list = MediaPlaybackList::new()?;
+    list.SetAutoRepeatEnabled(true)?;
+    for index in 1..=3 {
+        let uri = Uri::CreateUri(&HSTRING::from(
+            folder.join("silence.wav").to_string_lossy().as_ref(),
+        ))?;
+        let item = MediaPlaybackItem::Create(&MediaSource::CreateFromUri(&uri)?)?;
+        let display = item.GetDisplayProperties()?;
+        display.SetType(MediaPlaybackType::Music)?;
+        display
+            .MusicProperties()?
+            .SetTitle(&HSTRING::from(format!("QA Track {index}")))?;
+        display
+            .MusicProperties()?
+            .SetArtist(&HSTRING::from("QA Local Artist"))?;
+        display.SetThumbnail(&thumbnail)?;
+        item.ApplyDisplayProperties(&display)?;
+        list.Items()?.Append(&item)?;
+    }
+    player.SetSource(&list)?;
+    let controls = player.SystemMediaTransportControls()?;
+    controls.SetIsEnabled(true)?;
+    controls.SetIsNextEnabled(true)?;
+    controls.SetIsPreviousEnabled(true)?;
+    player.Play()?;
+    while !folder.join("stop-media").exists() {
+        if folder.join("mute-session").exists() {
+            let _ = std::fs::remove_file(folder.join("mute-session"));
+            mute_audio_session()?;
+            std::fs::write(folder.join("muted-session"), b"ready").unwrap();
+        }
+        if folder.join("next-media").exists() {
+            let _ = std::fs::remove_file(folder.join("next-media"));
+            list.MoveNext()?;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    player.Pause()?;
+    player.Close()?;
+    Ok(())
+}
+
+fn mute_audio_session() -> windows::core::Result<()> {
+    use windows::{
+        core::Interface,
+        Win32::{
+            Media::Audio::*,
+            System::{Com::*, Threading::GetCurrentProcessId},
+        },
+    };
+    unsafe {
+        let devices: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+        let endpoints = devices.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+        let mut found = false;
+        for index in 0..endpoints.GetCount()? {
+            let endpoint = endpoints.Item(index)?;
+            let manager = endpoint.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None)?;
+            let sessions = manager.GetSessionEnumerator()?;
+            for index in 0..sessions.GetCount()? {
+                let session = sessions.GetSession(index)?;
+                if session.cast::<IAudioSessionControl2>()?.GetProcessId()? == GetCurrentProcessId()
+                {
+                    session
+                        .cast::<ISimpleAudioVolume>()?
+                        .SetMute(true, std::ptr::null())?;
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "Silent fixture has no Core Audio session");
+    }
+    Ok(())
+}

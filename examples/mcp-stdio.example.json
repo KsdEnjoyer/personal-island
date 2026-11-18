@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "personal-island": {
+      "command": "C:/path/to/personal-island/target/release/task-mcp.exe",
+      "args": [],
+      "env": {
+        "PERSONAL_ISLAND_TIMEZONE": "Europe/Moscow"
+      }
+    }
+  }
+}
