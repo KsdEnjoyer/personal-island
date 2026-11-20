@@ -9,6 +9,7 @@ mod media;
 mod music_start;
 mod notes;
 mod platform;
+mod preferences;
 mod volume;
 mod weather;
 use platform::PasteTarget;
@@ -116,25 +117,61 @@ fn review_is_due(boundary: i64, now_ms: i64, last: Option<i64>, period_ms: i64) 
         && now_ms - boundary <= 5000.min(period_ms / 2)
         && last.is_none_or(|previous| boundary > previous)
 }
+fn next_local_review_boundary(now_ms: i64, period_ms: i64, offset_seconds: i32) -> i64 {
+    let offset = i64::from(offset_seconds) * 1000;
+    let local = now_ms + offset;
+    let midnight = local.div_euclid(86_400_000) * 86_400_000;
+    (midnight + next_review_boundary(local - midnight, period_ms)).min(midnight + 86_400_000)
+        - offset
+}
 async fn periodic_reveal_loop(app: tauri::AppHandle) {
-    let seconds = 30 * 60;
-    // Only debug builds can accelerate the real scheduler for native QA.
-    #[cfg(debug_assertions)]
-    let seconds = std::env::var("PERSONAL_ISLAND_QA_REVEAL_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0 && *value <= 1800)
-        .unwrap_or(seconds);
-    let period_ms = seconds as i64 * 1000;
     let mut last = None;
     loop {
+        let preferences = app.state::<preferences::Preferences>();
+        let minutes = preferences
+            .value
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .review_interval_minutes;
+        if minutes == 0 {
+            tokio::select! {
+                _ = preferences.changed.notified() => {},
+                _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {},
+            }
+            if app.get_webview_window("main").is_none() {
+                break;
+            }
+            continue;
+        }
+        let seconds = u64::from(minutes) * 60;
+        // Test acceleration never overrides the user's off switch.
+        #[cfg(debug_assertions)]
+        let seconds = std::env::var("PERSONAL_ISLAND_QA_REVEAL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0 && *value <= 1800)
+            .unwrap_or(seconds);
+        let period_ms = seconds as i64 * 1000;
         let now = chrono::Utc::now().timestamp_millis();
-        let boundary = next_review_boundary(now, period_ms);
+        let boundary = next_local_review_boundary(
+            now,
+            period_ms,
+            chrono::Local::now().offset().local_minus_utc(),
+        );
         // Recheck wall time periodically, including after sleep or clock changes.
-        tokio::time::sleep(std::time::Duration::from_millis(
-            (boundary - now).min(15000) as u64,
-        ))
-        .await;
+        tokio::select! {
+            _ = preferences.changed.notified() => continue,
+            _ = tokio::time::sleep(std::time::Duration::from_millis((boundary - now).min(15000) as u64)) => {},
+        }
+        if preferences
+            .value
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .review_interval_minutes
+            != minutes
+        {
+            continue;
+        }
         if app.get_webview_window("main").is_none() {
             break;
         }
@@ -160,6 +197,15 @@ fn set_island_shortcut_editing(window: tauri::WebviewWindow, editing: bool) -> R
 }
 
 #[tauri::command]
+fn set_shortcut_capture(window: tauri::WebviewWindow, capturing: bool) -> Result<(), String> {
+    keyboard::CAPTURING.store(
+        capturing && window.is_focused().map_err(|e| e.to_string())?,
+        Ordering::SeqCst,
+    );
+    Ok(())
+}
+
+#[tauri::command]
 fn hide_island(window: tauri::WebviewWindow, generation: u64) -> Result<(), String> {
     if window
         .state::<IslandPresentation>()
@@ -170,6 +216,7 @@ fn hide_island(window: tauri::WebviewWindow, generation: u64) -> Result<(), Stri
         return Ok(());
     }
     keyboard::EDITING.store(false, Ordering::Relaxed);
+    keyboard::CAPTURING.store(false, Ordering::Relaxed);
     window
         .state::<IslandPresentation>()
         .review_active
@@ -265,6 +312,29 @@ fn calendar_size(screen_w: f64, screen_h: f64) -> (f64, f64) {
 
 #[cfg(test)]
 mod layout_tests {
+    #[test]
+    fn custom_intervals_follow_local_midnight_in_fractional_timezones() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-20T13:04:00+05:45")
+            .unwrap()
+            .timestamp_millis();
+        let next = chrono::DateTime::parse_from_rfc3339("2026-11-20T13:30:00+05:45")
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(
+            super::next_local_review_boundary(now, 45 * 60000, 20700),
+            next
+        );
+        let late = chrono::DateTime::parse_from_rfc3339("2026-11-20T23:59:00+05:45")
+            .unwrap()
+            .timestamp_millis();
+        let midnight = chrono::DateTime::parse_from_rfc3339("2026-11-21T00:00:00+05:45")
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(
+            super::next_local_review_boundary(late, 50 * 60000, 20700),
+            midnight
+        );
+    }
     #[test]
     fn portrait_bounds_are_small_only_for_manual_and_scheduled_overviews() {
         assert_eq!(super::compact_dimensions(true, 0), (384.0, 148.0));
@@ -665,12 +735,26 @@ pub fn run() {
         .on_window_event(|_, event| {
             if matches!(event, tauri::WindowEvent::Focused(false)) {
                 keyboard::EDITING.store(false, Ordering::Relaxed);
+                keyboard::CAPTURING.store(false, Ordering::Relaxed);
             }
         })
         .setup(|app| {
             audio_reactivity::start(app.handle().clone());
             keyboard::start(app.handle().clone())?;
             let store = tauri::async_runtime::block_on(TaskStore::open_default())?;
+            let settings = preferences::Preferences::load(
+                task_core::default_db_path()?.with_file_name("widget-settings.json"),
+            )?;
+            {
+                let mut value = settings.value.lock().unwrap_or_else(|e| e.into_inner());
+                if let Err(error) = keyboard::configure(value.shortcut.clone()) {
+                    value.shortcut = preferences::Shortcut::default();
+                    value.shortcut_error = Some(format!(
+                        "Сохранённая клавиша недоступна. Временно используется Ё / `: {error}"
+                    ));
+                }
+            }
+            app.manage(settings);
             app.manage(weather::WeatherService::new(
                 task_core::default_db_path()?.with_file_name("weather.json"),
             )?);
@@ -707,6 +791,9 @@ pub fn run() {
             set_island_appearance,
             set_island_overlay,
             get_widget_summary,
+            preferences::get_widget_settings,
+            preferences::set_widget_settings,
+            set_shortcut_capture,
             register_island_shortcut,
             toggle_island_shortcut,
             reveal_island_shortcut,
@@ -724,6 +811,7 @@ pub fn run() {
             paste_to_previous_window,
             media::get_media_state,
             media::media_command,
+            media::seek_media,
             volume::player_volume,
             audio_reactivity::set_audio_reactivity,
             audio_reactivity::get_audio_reactivity,

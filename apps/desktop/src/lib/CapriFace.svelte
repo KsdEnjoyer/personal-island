@@ -2,6 +2,7 @@
   import { Clock3, Music2, Pause, Play, SkipBack, SkipForward } from 'lucide-svelte';
   import mask from '../assets/capri-mask.svg';
   import WeatherIcon from './WeatherIcon.svelte';
+  import TrackSeek from './TrackSeek.svelte';
   import { degrees } from './weather';
   import type { MediaState, WeatherState } from '../types';
   export let now: Date;
@@ -15,6 +16,7 @@
   export let announcement = '';
   export let open: () => void;
   export let mediaCommand: (action: string) => Promise<boolean>;
+  export let refreshMedia: () => Promise<void>;
   $: clock = now.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
   $: countdown = `${Math.floor(focusSeconds / 60).toString().padStart(2,'0')}:${(focusSeconds % 60).toString().padStart(2,'0')}`;
 </script>
@@ -38,12 +40,14 @@
       </button>
       <button class="capri-skip" aria-label="Следующий трек" disabled={mediaBusy || !media.can_next} on:click={() => mediaCommand('next')}><SkipForward size={13} fill="currentColor"/></button>
     </div>
+    <div class="capri-seek"><TrackSeek {media} compact refresh={refreshMedia}/></div>
   {/if}
   {#if announcement}<button class="capri-announcement" on:click={open}>{announcement}</button>{/if}
 </section>
 
 <style>
   .capri-face { position:relative; width:272px; height:104px; isolation:isolate; }
+  .capri-seek { position:absolute; z-index:3; left:98px; right:94px; bottom:-6px; }
   .capri-open { position:absolute; inset:0; padding:0; border:0; background:transparent; border-radius:28px; }
   .capri-eye,.capri-player,.capri-announcement {z-index:2}
   .capri-mask { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; user-select:none; filter:drop-shadow(0 6px 5px #0005); }

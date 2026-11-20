@@ -41,7 +41,7 @@
 .pill-summary b small { font-size:11px; font-weight:400; color:#b4b4b4; }
 .pill-summary > small,.pill-details > small { color:#858585; font-size:9px; }
 .pill-playing { display:flex; gap:4px; align-items:center; height:13px; color:#a9dfb9; font-size:9px; }
-.track-peek { padding:8px 18px; height:76px; position:relative; }
+.track-peek { padding:8px 18px; height:86px; position:relative; }
 .track-peek-top { display:flex; align-items:center; gap:9px; height:34px; }
 .peek-art { width:34px; height:34px; border:0; padding:0; background:#202723; border-radius:8px; color:#a9dfb9; display:grid; place-items:center; flex:none; }
 .peek-art .pill-artwork { width:34px; height:34px; border-radius:8px; }
@@ -62,6 +62,11 @@
 .track-source-row { display:flex; align-items:center; gap:12px; }
 .track-source-row .source-select { flex:1; min-width:0; }
 .music-pill { grid-template-columns:minmax(0,1fr) 80px minmax(0,1fr); gap:6px; }
+.compact-seek { position:absolute; z-index:3; left:17px; right:17px; bottom:0; }
+.settings-panel { width:294px; max-height:calc(100% - 76px); overflow:auto; color-scheme:dark; scrollbar-width:thin; scrollbar-color:#4e5b51 transparent; }
+.settings-panel::-webkit-scrollbar { width:4px; }
+.settings-panel::-webkit-scrollbar-track { background:transparent; }
+.settings-panel::-webkit-scrollbar-thumb { background:#4e5b51; border-radius:4px; }
 .music-pill:active:not(:disabled) { transform:translateX(-50%); }
 .compact-open { border:0; padding:0; background:none; min-width:0; text-align:left; }
 .compact-playback { display:flex; gap:3px; align-items:center; justify-content:center; }

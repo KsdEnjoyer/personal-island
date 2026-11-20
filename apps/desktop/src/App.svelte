@@ -6,6 +6,10 @@
     Pause, Pencil, Pin, Play, Plus, Power, RotateCcw, SlidersHorizontal, Trash2, X, Clipboard, Music2, CloudSun, SkipBack, SkipForward, NotebookPen } from 'lucide-svelte';
   import { createLiquidIsland, type AudioFrame } from './lib/liquid';
   import PlayerVolume from './lib/PlayerVolume.svelte';
+  import TrackSeek from './lib/TrackSeek.svelte';
+  import FocusTimer from './lib/FocusTimer.svelte';
+  import WidgetPreferences from './lib/WidgetPreferences.svelte';
+  import { defaultWidgetSettings } from './lib/widget-settings';
   import CalendarPanel from './lib/CalendarPanel.svelte';
   import ClipboardPanel from './lib/ClipboardPanel.svelte';
   import MusicPanel from './lib/MusicPanel.svelte';
@@ -21,7 +25,7 @@
   import { loadAppearance, saveAppearance, type IslandAppearance } from './lib/appearance';
   import { degrees, weatherLabel } from './lib/weather';
   import { createPresence } from './lib/presence';
-  import type { MediaState, NewTask, Task, WeatherState } from './types';
+  import type { MediaState, NewTask, Task, WeatherState, WidgetSettings } from './types';
 
   type Tab = 'home' | 'today' | 'tasks' | 'calendar' | 'done' | 'clipboard' | 'music' | 'weather' | 'notes';
   const tabs: { id: Tab; label: string; icon: typeof ListTodo }[] = [
@@ -74,6 +78,9 @@
   let nativeHovered: boolean | null = null;
   let pinned = false;
   let settingsOpen = false;
+  let widgetSettings: WidgetSettings = defaultWidgetSettings;
+  let settingsBusy = false;
+  let settingsError = '';
   let liquidEnabled = true;
   let appearance: IslandAppearance = 'island';
   let appearanceError = '';
@@ -123,9 +130,8 @@
   let overlayRequested = false;
   let overlayGeneration = 0;
   let overlayTimer:ReturnType<typeof setTimeout> | undefined;
-  let pausedCompactSession: string | null = null;
-  $: compactPlayback = !!media?.session_id && (!!media.playing || pausedCompactSession === media.session_id);
-  $: musicPeek = compactMode === 'track' && !!media?.playing;
+  $: compactPlayback = !!media?.session_id && !!media.title.trim();
+  $: musicPeek = compactMode === 'track' && compactPlayback;
   $: reviewItems = reminderReview(tasks, now);
   $: reviewedTask = reviewActive && reviewItems.length ? reviewItems[reviewIndex % reviewItems.length] : null;
   $: if (reviewedTask && visible && !expanded && !dismissing) {
@@ -135,7 +141,7 @@
   $: capriMode = appearance === 'portrait' && compactMode === 'manual' && !activeReminder && !reviewedTask;
   $: capriCompact = capriMode && !expanded;
   $: compactWidth = capriMode ? 272 : compactMode === 'reminder' ? reminderPhase === 'bell' ? 96 : 272 : compactMode === 'manual' ? 272 : 360;
-  $: compactHeight = capriMode ? 104 : compactMode === 'reminder' ? reminderPhase === 'bell' ? 40 : 56 : compactMode === 'manual' ? 56 : 76;
+  $: compactHeight = capriMode ? 104 : compactMode === 'reminder' ? reminderPhase === 'bell' ? 40 : 56 : compactMode === 'manual' ? 56 : 86;
   $: if (liquid && !expanded) liquid.setCompact(compactWidth, compactHeight);
   $: overlayNeeded = visible && !expanded && musicPeek && volumeOpen;
   $: if (overlayNeeded !== overlayRequested || overlayGeneration !== activeGeneration) {
@@ -159,7 +165,6 @@
     if (!media?.session_id || mediaBusy) return false;
     mediaBusy = true;
     try {
-      if (action === 'toggle') pausedCompactSession = media.playing ? media.session_id : null;
       await invoke('media_command', { sessionId: media.session_id, action }); await refreshMedia();
       return true;
     }
@@ -216,7 +221,6 @@
   $: reminders = openTasks.filter(task => task.due_at).sort((a,b) => Date.parse(a.due_at!) - Date.parse(b.due_at!)).slice(0, 3);
   $: nextTask = reminders[0] || openTasks[0];
   $: tabTitle = tab === 'today' ? 'Сегодня' : tab === 'tasks' ? 'Задачи' : 'Готово';
-  $: timerProgress = Math.min(1, focusSeconds / focusTotalSeconds);
   let nativeAudioEnabled = false;
   async function syncAudio(enabled: boolean) {
     if (nativeAudioEnabled === enabled) return;
@@ -490,7 +494,6 @@
     reviewActive = typeof payload !== 'number' && (payload.reason === 'startup' || payload.reason === 'hourly');
     reviewIndex = 0; reviewNextAt = Date.now() + 4_500; reviewLeaseExtended = false;
     volumeOpen = false;
-    pausedCompactSession = null;
     const animateIn = !visible || dismissing;
     const version = ++presentationVersion;
     dismissing = false;
@@ -605,6 +608,13 @@
       appearanceError = 'Не удалось применить оформление. Попробуй выбрать его ещё раз.';
     });
   }
+  async function saveWidgetSettings(settings: WidgetSettings): Promise<boolean> {
+    if (settingsBusy) return false;
+    settingsBusy = true; settingsError = '';
+    try { widgetSettings = await invoke<WidgetSettings>('set_widget_settings', {settings}); return true; }
+    catch (err) { settingsError = String(err); return false; }
+    finally { settingsBusy = false; }
+  }
   async function openComposer() {
     if (tab === 'home') tab = 'tasks';
     clearTimeout(collapseTimer); showForm = true; editId = null; deleteId = null;
@@ -656,12 +666,16 @@
     } catch (err) { error = String(err); }
   }
   async function exitApp() { try { if (notesPanel && !await notesPanel.flush()) return; await invoke('exit_app'); } catch (err) { error = String(err); } }
-  function setFocusMinutes(minutes: number) { focusMinutes = minutes; focusSeconds = minutes * 60; focusTotalSeconds = focusSeconds; timerRunning = false; }
-  function addFocusMinute() {
-    if (focusSeconds >= 4 * 3600) return;
-    focusSeconds = (timerRunning ? Math.max(0,Math.ceil((timerEndsAt-Date.now())/1000)) : focusSeconds) + 60;
-    focusTotalSeconds += 60;
-    if (timerRunning) timerEndsAt += 60000;
+  function setFocusMinutes(minutes: number) {
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) return;
+    focusMinutes = minutes; focusSeconds = minutes * 60; focusTotalSeconds = focusSeconds; timerRunning = false;
+    try { localStorage.setItem('personal-island.focus-minutes.v1', String(minutes)); } catch { /* Current timer still works. */ }
+  }
+  function addFocusMinutes(minutes: number) {
+    if (!Number.isInteger(minutes) || minutes < 1 || focusTotalSeconds + minutes * 60 > 4 * 3600) return;
+    focusSeconds = (timerRunning ? Math.max(0,Math.ceil((timerEndsAt-Date.now())/1000)) : focusSeconds) + minutes * 60;
+    focusTotalSeconds += minutes * 60;
+    if (timerRunning) timerEndsAt += minutes * 60000;
   }
   function toggleTimer() {
     if (timerRunning) {
@@ -686,6 +700,10 @@
     const appearanceSettings = loadAppearance();
     appearance = appearanceSettings.style;
     liquidEnabled = appearanceSettings.liquid;
+    try {
+      const savedMinutes = Number(localStorage.getItem('personal-island.focus-minutes.v1'));
+      if (Number.isInteger(savedMinutes) && savedMinutes >= 1 && savedMinutes <= 240) setFocusMinutes(savedMinutes);
+    } catch { /* Use the default duration when storage is unavailable. */ }
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     let unlistenPointer: UnlistenFn | undefined;
@@ -718,8 +736,7 @@
         unlistenReminders = stopReminders;
         unlistenMedia = await listen<MediaState>('media-changed', event => {
           lastMediaEvent = Date.now();
-          if (!preferredMedia || event.payload.session_id === preferredMedia) media = event.payload;
-          if (!event.payload.playing && compactMode === 'track' && !expanded) { compactMode = 'manual'; volumeOpen = false; }
+          media = event.payload;
         });
         const stop = await listen<number | {generation: number; reason: 'manual' | 'track' | 'hourly' | 'startup'}>('island-reveal', event => { void revealFromShortcut(event.payload); });
         if (disposed) { stop(); return; }
@@ -728,6 +745,8 @@
         if (disposed) { stopToggle(); return; }
         const stopReveal = unlisten;
         unlisten = () => { stopReveal(); stopToggle(); };
+        try { widgetSettings = await invoke<WidgetSettings>('get_widget_settings'); }
+        catch (err) { settingsError = String(err); }
         await invoke('set_island_appearance', {portrait:appearance === 'portrait'});
         if (disposed) return;
         await invoke('register_island_shortcut');
@@ -780,11 +799,12 @@
     {:else if reviewedTask}
       <ReminderReview task={reviewedTask} {now} count={reviewItems.length} index={reviewIndex % reviewItems.length} taskCount={openTasks.length} {weather} open={() => void openReviewedTask()} next={() => nextReview(true)}/>
     {:else if capriMode}
-      <CapriFace {now} {focusSeconds} {timerRunning} tasksLabel={`${openTasks.length} ${taskWord(openTasks.length)}`} {weather} {media} playback={compactPlayback} {mediaBusy} {announcement} open={openDashboard} mediaCommand={compactCommand}/>
+      <CapriFace {now} {focusSeconds} {timerRunning} tasksLabel={`${openTasks.length} ${taskWord(openTasks.length)}`} {weather} {media} playback={compactPlayback} {mediaBusy} {announcement} open={openDashboard} mediaCommand={compactCommand} refreshMedia={refreshMedia}/>
     {:else if musicPeek && media}
       <section class="track-peek" aria-label="Новый трек">
         <div class="track-peek-top"><button class="peek-art" aria-label="Открыть музыкальный плеер" on:click={() => { tab = 'music'; void openDashboard(); }}>{#if media.artwork}<img class="pill-artwork" src={media.artwork} alt="Обложка текущего трека"/>{:else}<Music2 size={28}/>{/if}</button><button class="peek-title" on:click={() => { tab = 'music'; void openDashboard(); }}><b>{media.title || 'Без названия'}</b><span>{media.artist || media.source}</span></button>{#if media.session_id}<PlayerVolume sessionId={media.session_id} bind:open={volumeOpen} detached detachedOffset={45} {reducedMotion}/>{/if}</div>
         <div class="peek-controls"><span>{media.source}</span><button aria-label="Предыдущий трек" disabled={mediaBusy || !media.can_previous} on:click={() => compactCommand('previous')}><SkipBack size={17} fill="currentColor"/></button><button aria-label={media.playing ? 'Приостановить музыку' : 'Продолжить музыку'} disabled={mediaBusy || !media.can_toggle} on:click={() => compactCommand('toggle')}>{#if media.playing}<Pause size={18} fill="currentColor"/>{:else}<Play size={18} fill="currentColor"/>{/if}</button><button aria-label="Следующий трек" disabled={mediaBusy || !media.can_next} on:click={() => compactCommand('next')}><SkipForward size={17} fill="currentColor"/></button></div>
+        <TrackSeek {media} compact refresh={refreshMedia}/>
         {#if mediaError}<small class="peek-error" role="alert">{mediaError}</small>{/if}
       </section>
     {:else if compactPlayback && media}
@@ -800,6 +820,7 @@
         </div>
         <button class="pill-details compact-open" aria-label="Открыть задачи и погоду" on:click={openDashboard}><span class="compact-task-count">{openTasks.length}{'\u00a0'}{taskWord(openTasks.length)}</span><span class="pill-weather" class:stale={weather.stale} title="Погода в Санкт-Петербурге">{#if weather.data}<WeatherIcon code={weather.data.current.weather_code} isDay={!!weather.data.current.is_day} size={12}/>{weather.stale ? '—°' : degrees(weather.data.current.temperature_2m)}{:else}<CloudSun size={12}/>—°{/if}</span></button>
       </div>
+      <div class="compact-seek"><TrackSeek {media} compact refresh={refreshMedia}/></div>
       {#if mediaError}<small class="compact-media-error" role="alert">{mediaError}</small>{/if}
     {:else}
       <button class="pill" aria-label="Развернуть список задач" on:click={openDashboard}>
@@ -825,13 +846,13 @@
           <AppearancePicker value={appearance} change={style => updateAppearance(style)}/>
           <label><span>Жидкий край</span><input type="checkbox" checked={liquidEnabled} on:change={event => updateAppearance(appearance, event.currentTarget.checked)}/></label>
           {#if appearanceError}<p class="appearance-error" role="status">{appearanceError}</p>{/if}
-          <p class="shortcut-hint">Ё / ` — показать или скрыть.<br/>Двойное нажатие за 1,5 с убирает буквы из ввода.<br/>Автопоказ в :00 и :30 каждого часа.</p>
+          <WidgetPreferences settings={widgetSettings} save={saveWidgetSettings} busy={settingsBusy} error={settingsError}/>
           <button class="exit-button" aria-label="Выход" on:click={exitApp}><Power size={15}/> Завершить приложение</button>
         </div>
       {/if}
       <div class="view-stage" bind:this={viewStage}>
       {#if tab === 'home'}
-        <HomePanel active={expanded && visible} {tasks} {now} {media} {mediaError} {weather} {focusSeconds} {focusTotalSeconds} {timerRunning} {shortcutReady} {pinned} {reducedMotion} {mediaBusy} navigate={selectTab} createTask={openComposer} toggleFocus={toggleTimer} addMinute={addFocusMinute} resetFocus={() => setFocusMinutes(focusMinutes)} mediaCommand={compactCommand} playMusic={playFromHome} openSettings={() => settingsOpen = true}/>
+        <HomePanel active={expanded && visible} {tasks} {now} {media} {mediaError} {weather} {focusSeconds} {focusTotalSeconds} {timerRunning} focusMinutes={focusMinutes} reviewInterval={widgetSettings.review_interval_minutes} {pinned} {mediaBusy} navigate={selectTab} createTask={openComposer} toggleFocus={toggleTimer} setFocus={setFocusMinutes} addMinutes={addFocusMinutes} resetFocus={() => setFocusMinutes(focusMinutes)} mediaCommand={compactCommand} playMusic={playFromHome} openSettings={() => settingsOpen = true}/>
       {:else if tab === 'clipboard'}
         <ClipboardPanel paste={pasteClipboard}/>
       {:else if tab === 'music'}
@@ -879,9 +900,7 @@
         {/if}
         <aside class="focus-panel" class:reminders-only={tab === 'tasks' || tab === 'done'}>
           {#if tab !== 'tasks' && tab !== 'done'}
-          <div class="focus-top"><div class="timer-dial" class:timer-active={timerRunning}><svg viewBox="0 0 104 104" aria-hidden="true"><circle class="timer-track" cx="52" cy="52" r="46"/><circle class="timer-progress" cx="52" cy="52" r="46" pathLength="1" stroke-dasharray="1" stroke-dashoffset={1 - timerProgress}/></svg><span class="timer-value">{countdown(focusSeconds)}</span></div><div class="timer-actions"><button class="timer-toggle" aria-label={timerRunning ? 'Приостановить таймер' : 'Запустить таймер'} title={timerRunning ? 'Пауза' : 'Начать фокус'} on:click={toggleTimer}>{#if timerRunning}<Pause size={15} fill="currentColor"/>Пауза{:else}<Play size={15} fill="currentColor"/>Старт{/if}</button><div class="timer-secondary"><button aria-label="Добавить минуту" on:click={addFocusMinute}>+1 мин</button><button class="timer-reset" aria-label="Сбросить таймер" title="Сбросить" on:click={() => setFocusMinutes(focusMinutes)}>Сброс</button></div></div></div>
-          <div class="focus-caption">{timerRunning ? `до ${new Date(now.getTime()+focusSeconds*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}` : 'Таймер'} · всего {Math.round(focusTotalSeconds/60)} мин</div>
-          <div class="timer-presets">{#each [15, 25, 45] as minutes}<button class:active={focusMinutes === minutes} aria-pressed={focusMinutes === minutes} on:click={() => setFocusMinutes(minutes)}>{minutes} мин</button>{/each}</div>
+          <FocusTimer seconds={focusSeconds} total={focusTotalSeconds} running={timerRunning} minutes={focusMinutes} toggle={toggleTimer} set={setFocusMinutes} add={addFocusMinutes} reset={() => setFocusMinutes(focusMinutes)}/>
           {/if}
           <div class="reminders-heading"><Bell size={14}/><span>Напоминания</span><span class="reminders-count">{openTasks.filter(task => task.due_at).length}</span></div>
           <div class="reminders">{#each reminders as task}<button class="reminder" title={task.title} on:click={() => { tab = new Date(task.due_at!) < dayEnd(now) ? 'today' : 'tasks'; showForm = false; }}><span class="reminder-dot" class:late={overdue(task)}></span><span><b>{task.title}</b><small>{dateLabel(task.due_at!)}</small></span></button>{:else}<div class="no-reminders">Нет напоминаний</div>{/each}</div>

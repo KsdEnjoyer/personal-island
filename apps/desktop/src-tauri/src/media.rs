@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 use windows::{
@@ -37,9 +37,44 @@ pub struct MediaState {
     can_toggle: bool,
     can_previous: bool,
     can_next: bool,
+    can_seek: bool,
 }
 
 struct Runtime;
+struct SeekAnchor {
+    source: String,
+    title: String,
+    stamp: i64,
+    position: f64,
+    at: Instant,
+    playing: bool,
+}
+impl SeekAnchor {
+    fn project(
+        &mut self,
+        source: &str,
+        title: &str,
+        stamp: i64,
+        playing: bool,
+        duration: f64,
+        now: Instant,
+    ) -> Option<f64> {
+        if self.source != source || self.title != title || stamp > self.stamp {
+            return None;
+        }
+        if self.playing {
+            self.position += now.saturating_duration_since(self.at).as_secs_f64();
+        }
+        self.at = now;
+        self.playing = playing;
+        self.position = self.position.clamp(0.0, duration.max(0.0));
+        Some(self.position)
+    }
+}
+static SEEK_ANCHOR: OnceLock<Mutex<Option<SeekAnchor>>> = OnceLock::new();
+fn seek_anchor() -> &'static Mutex<Option<SeekAnchor>> {
+    SEEK_ANCHOR.get_or_init(Mutex::default)
+}
 #[derive(Default)]
 pub struct MediaPreference(std::sync::Mutex<Option<String>>);
 #[derive(Default)]
@@ -157,11 +192,37 @@ fn sessions(manager: &Manager) -> windows::core::Result<Vec<(String, Session)>> 
     let mut result = Vec::new();
     for index in 0..list.Size()? {
         if let Ok(session) = list.GetAt(index) {
+            if session
+                .GetPlaybackInfo()
+                .and_then(|info| info.PlaybackStatus())
+                .ok()
+                == Some(Status::Closed)
+            {
+                continue;
+            }
             if let Ok(id) = session.SourceAppUserModelId() {
                 result.push((id.to_string(), session));
             }
         }
     }
+    // Windows can retain an old session after a process restarts. Metadata and
+    // commands must resolve the same live instance, not different equal IDs.
+    let current = manager.GetCurrentSession().ok();
+    result.sort_by_cached_key(|(_, session)| {
+        let playing = session
+            .GetPlaybackInfo()
+            .and_then(|info| info.PlaybackStatus())
+            .ok()
+            == Some(Status::Playing);
+        let updated = session
+            .GetTimelineProperties()
+            .and_then(|t| t.LastUpdatedTime())
+            .map(|t| t.UniversalTime)
+            .unwrap_or(0);
+        std::cmp::Reverse((current.as_ref() == Some(session), playing, updated))
+    });
+    let mut seen = HashSet::new();
+    result.retain(|(id, _)| seen.insert(id.clone()));
     Ok(result)
 }
 fn artwork(props: &Properties) -> Option<String> {
@@ -218,6 +279,75 @@ fn encode_artwork(bytes: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_paused_seek_ignores_stale_metadata_until_a_fresh_timeline_or_track() {
+        let now = Instant::now();
+        let mut anchor = SeekAnchor {
+            source: "fixture".into(),
+            title: "One".into(),
+            stamp: 100,
+            position: 60.0,
+            at: now,
+            playing: false,
+        };
+        assert_eq!(
+            anchor.project(
+                "fixture",
+                "One",
+                100,
+                false,
+                180.0,
+                now + Duration::from_secs(30)
+            ),
+            Some(60.0)
+        );
+        assert_eq!(
+            anchor.project(
+                "fixture",
+                "One",
+                100,
+                true,
+                180.0,
+                now + Duration::from_secs(31)
+            ),
+            Some(60.0)
+        );
+        assert_eq!(
+            anchor.project(
+                "fixture",
+                "One",
+                100,
+                true,
+                180.0,
+                now + Duration::from_secs(33)
+            ),
+            Some(62.0)
+        );
+        assert_eq!(
+            anchor.project("fixture", "One", 101, false, 180.0, now),
+            None
+        );
+        assert_eq!(
+            anchor.project("fixture", "Two", 100, false, 180.0, now),
+            None
+        );
+        assert_eq!(anchor.project("other", "One", 100, false, 180.0, now), None);
+    }
+    #[test]
+    fn seek_uses_relative_seconds_clamps_to_track_and_rejects_bad_input() {
+        assert_eq!(
+            seek_ticks(12.5, 50_000_000, 650_000_000).unwrap(),
+            175_000_000
+        );
+        assert_eq!(
+            seek_ticks(500.0, 50_000_000, 650_000_000).unwrap(),
+            650_000_000
+        );
+        for value in [-1.0, f64::NAN, f64::INFINITY] {
+            assert!(seek_ticks(value, 0, 600_000_000).is_err());
+        }
+        assert!(seek_ticks(0.0, 100, 100).is_err());
+    }
     #[test]
     fn yandex_launch_targets_music_instead_of_browser_media() {
         for id in ["ru.yandex.desktop.music", "YandexMusic.exe", "Yandex.Music"] {
@@ -319,12 +449,14 @@ fn snapshot(preferred: Option<String>) -> Result<MediaState, String> {
             == Some(Status::Playing);
         (
             preferred.as_ref() != Some(id),
+            !is_yandex_music(id),
             !playing,
             !yandex,
             current.as_ref() != Some(id),
         )
     });
     let Some((id, session)) = list.first() else {
+        *seek_anchor().lock().unwrap_or_else(|e| e.into_inner()) = None;
         return Ok(MediaState {
             sessions: sources,
             ..Default::default()
@@ -337,7 +469,7 @@ fn snapshot(preferred: Option<String>) -> Result<MediaState, String> {
     let info = session.GetPlaybackInfo().map_err(|e| e.to_string())?;
     let controls = info.Controls().map_err(|e| e.to_string())?;
     let playing = info.PlaybackStatus().ok() == Some(Status::Playing);
-    let (position, duration) = session
+    let (mut position, duration, timeline_stamp) = session
         .GetTimelineProperties()
         .ok()
         .map(|timeline| {
@@ -346,24 +478,59 @@ fn snapshot(preferred: Option<String>) -> Result<MediaState, String> {
                 .EndTime()
                 .map(|time| time.Duration)
                 .unwrap_or(start);
-            let position = timeline
+            let mut position = timeline
                 .Position()
                 .map(|time| time.Duration)
                 .unwrap_or(start);
+            if playing {
+                if let Ok(updated) = timeline.LastUpdatedTime() {
+                    let now = chrono::Utc::now()
+                        .timestamp_millis()
+                        .saturating_mul(10_000)
+                        .saturating_add(116_444_736_000_000_000);
+                    let elapsed = now.saturating_sub(updated.UniversalTime);
+                    // Ignore missing/implausible provider timestamps.
+                    if (0..=864_000_000_000).contains(&elapsed) {
+                        position = position.saturating_add(elapsed);
+                    }
+                }
+            }
             (
-                ((position - start).max(0) as f64) / 10_000_000.0,
+                ((position.clamp(start, end.max(start)) - start).max(0) as f64) / 10_000_000.0,
                 ((end - start).max(0) as f64) / 10_000_000.0,
+                timeline
+                    .LastUpdatedTime()
+                    .map(|time| time.UniversalTime)
+                    .unwrap_or(0),
             )
         })
-        .unwrap_or((0.0, 0.0));
+        .unwrap_or((0.0, 0.0, 0));
+    let title = props
+        .Title()
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    {
+        let mut anchor = seek_anchor().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = anchor.as_mut() {
+            if let Some(projected) = previous.project(
+                id,
+                &title,
+                timeline_stamp,
+                playing,
+                duration,
+                Instant::now(),
+            ) {
+                position = projected;
+            } else {
+                *anchor = None;
+            }
+        }
+    }
     Ok(MediaState {
         sessions: sources,
         session_id: Some(id.clone()),
         source: label(id),
-        title: props
-            .Title()
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
+        title,
         artist: props
             .Artist()
             .map(|value| value.to_string())
@@ -380,7 +547,86 @@ fn snapshot(preferred: Option<String>) -> Result<MediaState, String> {
             },
         can_previous: controls.IsPreviousEnabled().unwrap_or(false),
         can_next: controls.IsNextEnabled().unwrap_or(false),
+        can_seek: duration > 0.0 && controls.IsPlaybackPositionEnabled().unwrap_or(false),
     })
+}
+
+fn seek_ticks(seconds: f64, start: i64, end: i64) -> Result<i64, String> {
+    if !seconds.is_finite() || seconds < 0.0 || end <= start {
+        return Err("Позиция трека недоступна или некорректна.".into());
+    }
+    let relative = (seconds * 10_000_000.0)
+        .round()
+        .min((end.saturating_sub(start)) as f64) as i64;
+    Ok(start.saturating_add(relative).min(end))
+}
+
+#[tauri::command]
+pub async fn seek_media(session_id: String, position: f64, title: String) -> Result<(), String> {
+    if !position.is_finite() || position < 0.0 {
+        return Err("Некорректная позиция трека.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _runtime = Runtime::new()?;
+        let manager = Manager::RequestAsync()
+            .and_then(|operation| operation.join())
+            .map_err(|e| e.to_string())?;
+        let (_, session) = sessions(&manager)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|(id, _)| id == &session_id)
+            .ok_or("Плеер уже закрыт.")?;
+        let current_title = session
+            .TryGetMediaPropertiesAsync()
+            .and_then(|op| op.join())
+            .and_then(|props| props.Title())
+            .map_err(|e| e.to_string())?;
+        if current_title.to_string() != title {
+            return Err("Трек уже сменился. Попробуй перемотать ещё раз.".into());
+        }
+        let controls = session
+            .GetPlaybackInfo()
+            .and_then(|info| info.Controls())
+            .map_err(|e| e.to_string())?;
+        if !controls.IsPlaybackPositionEnabled().unwrap_or(false) {
+            return Err("Этот плеер не поддерживает перемотку через Windows.".into());
+        }
+        let timeline = session.GetTimelineProperties().map_err(|e| e.to_string())?;
+        let ticks = seek_ticks(
+            position,
+            timeline.StartTime().map_err(|e| e.to_string())?.Duration,
+            timeline.EndTime().map_err(|e| e.to_string())?.Duration,
+        )?;
+        if !session
+            .TryChangePlaybackPositionAsync(ticks)
+            .and_then(|op| op.join())
+            .map_err(|e| e.to_string())?
+        {
+            return Err("Плеер отклонил перемотку. Попробуй ещё раз.".into());
+        }
+        // Some providers keep their old public timeline while paused even
+        // though playback has moved. Keep the requested position until a
+        // newer provider timestamp, a different track, or a closed session.
+        let start = timeline.StartTime().map_err(|e| e.to_string())?.Duration;
+        *seek_anchor().lock().unwrap_or_else(|e| e.into_inner()) = Some(SeekAnchor {
+            source: session_id,
+            title,
+            stamp: timeline
+                .LastUpdatedTime()
+                .map(|t| t.UniversalTime)
+                .unwrap_or(0),
+            position: (ticks - start) as f64 / 10_000_000.0,
+            at: Instant::now(),
+            playing: session
+                .GetPlaybackInfo()
+                .and_then(|info| info.PlaybackStatus())
+                .ok()
+                == Some(Status::Playing),
+        });
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

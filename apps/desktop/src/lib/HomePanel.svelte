@@ -2,8 +2,10 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { ArrowUpRight, ExternalLink, ListTodo, Timer, Music2, CloudSun, NotebookPen, Clipboard, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, SlidersHorizontal } from 'lucide-svelte';
+  import { ArrowUpRight, ExternalLink, ListTodo, Timer, Music2, CloudSun, NotebookPen, Clipboard, Pause, Play, Plus, SkipBack, SkipForward, SlidersHorizontal } from 'lucide-svelte';
   import WeatherIcon from './WeatherIcon.svelte';
+  import FocusTimer from './FocusTimer.svelte';
+  import { reviewLabel } from './widget-settings';
   import { degrees, weatherLabel } from './weather';
   import type { Task, MediaState, WeatherState } from '../types';
   export let active = false;
@@ -15,14 +17,15 @@
   export let focusSeconds:number;
   export let focusTotalSeconds:number;
   export let timerRunning:boolean;
-  export let shortcutReady:boolean;
+  export let focusMinutes:number;
+  export let reviewInterval:number;
   export let pinned:boolean;
-  export let reducedMotion:boolean;
   export let mediaBusy:boolean;
   export let navigate:(tab:'today'|'tasks'|'calendar'|'notes'|'music'|'weather'|'clipboard')=>void;
   export let createTask:()=>void;
   export let toggleFocus:()=>void;
-  export let addMinute:()=>void;
+  export let setFocus:(minutes:number)=>void;
+  export let addMinutes:(minutes:number)=>void;
   export let resetFocus:()=>void;
   export let mediaCommand:(action:string)=>void;
   export let playMusic:()=>void;
@@ -47,7 +50,6 @@
   $: todayTasks = openTasks.filter(t=>t.due_at && new Date(t.due_at).toDateString()===now.toDateString());
   $: nearest = openTasks.filter(t=>t.due_at).sort((a,b)=>Date.parse(a.due_at!)-Date.parse(b.due_at!))[0];
   $: if (active) void refreshSummary();
-  const countdown = (seconds:number)=>`${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`;
   const plural = new Intl.PluralRules('ru');
   const recordCount = (count:number | undefined) => count===undefined ? '— записей' : `${count} ${plural.select(count)==='one' ? 'запись' : plural.select(count)==='few' ? 'записи' : 'записей'}`;
   function due(date:string) {
@@ -80,9 +82,7 @@
     </section>
     <section class="overview-card focus-overview" aria-label="Таймер работы">
       <div class="card-heading"><h2><Timer size={13}/>Таймер</h2><span class:running={timerRunning}>{timerRunning ? 'Идёт фокус' : 'На паузе'}</span></div>
-      <div class="focus-line"><strong>{countdown(focusSeconds)}</strong><button class="start-focus" aria-label={timerRunning ? 'Приостановить таймер' : 'Запустить таймер'} on:click={toggleFocus}>{#if timerRunning}<Pause size={13} fill="currentColor"/>Пауза{:else}<Play size={13} fill="currentColor"/>Старт{/if}</button></div>
-      <div class="focus-bottom"><span>{Math.round(focusTotalSeconds/60)} мин</span><button aria-label="Добавить минуту" on:click={addMinute}>+1 мин</button><button aria-label="Сбросить таймер" on:click={resetFocus}><RotateCcw size={11}/></button></div>
-      <div class="focus-progress" aria-hidden="true"><i style:width={`${Math.max(0,Math.min(100,100*(1-focusSeconds/focusTotalSeconds)))}%`} style:transition={reducedMotion ? 'none' : undefined}></i></div>
+      <FocusTimer seconds={focusSeconds} total={focusTotalSeconds} running={timerRunning} minutes={focusMinutes} compact toggle={toggleFocus} set={setFocus} add={addMinutes} reset={resetFocus}/>
     </section>
     <section class="overview-card music-overview" aria-label="Музыка в обзоре">
       {#if launchError || mediaError}<p class="launch-error" role="alert">{launchError || mediaError}</p>{/if}
@@ -108,7 +108,7 @@
       <span class="card-heading"><span class="card-title"><Clipboard size={13}/>Буфер обмена</span><span class="capture-status" class:paused={summary?.capturing===false}><i></i>{summaryError ? 'Нет данных' : summary ? summary.capturing ? 'Запись' : 'Пауза' : '…'}</span></span><span class="clipboard-stats"><span>{recordCount(summaryError ? undefined : summary?.clipboard)}</span><span>{summaryError ? '—' : summary?.pinned ?? '—'} закреплено</span></span>
     </button>
   </div>
-  <div class="widget-status"><span title={shortcutReady ? 'Клавиша под Escape показывает островок' : 'Горячая клавиша недоступна'}><kbd>Ё / `</kbd>{shortcutReady ? 'Показать' : 'Недоступно'}</span><span>Автопоказ · в :00 и :30</span><button aria-label="Открыть настройки виджета" on:click={openSettings}><SlidersHorizontal size={11}/>Настройки</button></div>
+  <div class="widget-status"><span>{reviewLabel(reviewInterval)}</span><button aria-label="Открыть настройки виджета" on:click={openSettings}><SlidersHorizontal size={11}/>Настройки</button></div>
 </section>
 
 <style>
@@ -143,15 +143,6 @@
   .nearest-task { display:flex; align-items:center; justify-content:space-between; gap:9px; margin-top:auto; padding:5px 0 0; background:none; border:0; border-top:1px solid #242424; min-width:0; color:#a0a0a0; }
   .nearest-task span { font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .nearest-task small { font-size:8px; white-space:nowrap; color:#8d7f6d; }
-  .focus-line { display:flex; align-items:center; justify-content:space-between; gap:15px; margin:4px 0; }
-  .focus-line strong { font-size:28px; letter-spacing:-1px; font-weight:500; font-variant-numeric:tabular-nums; line-height:1.1; }
-  .start-focus { display:flex; gap:5px; align-items:center; justify-content:center; min-width:73px; height:28px; padding:0 11px; border:0; border-radius:15px; font-size:10px; background:#e5e5e5; color:#171717; }
-  .start-focus:hover { background:#fff; }
-  .focus-bottom { display:flex; align-items:center; gap:10px; color:#777; font-size:8px; margin-top:auto; }
-  .focus-bottom button { display:flex; align-items:center; border:0; padding:2px 4px; background:none; color:#9f9f9f; border-radius:5px; font-size:9px; }
-  .focus-bottom > span { margin-right:auto; }
-  .focus-progress { height:2px; background:#2a251c; border-radius:2px; margin-top:5px; }
-  .focus-progress i { display:block; height:100%; background:#d6b476; transition:width 1s linear; }
   .home-track { display:flex; gap:9px; align-items:center; min-width:0; flex:1; margin-top:4px; }
   .home-cover { width:38px; height:38px; flex:none; position:relative; display:grid; place-items:center; border:0; border-radius:9px; overflow:hidden; padding:0; background:#1c2821; color:#b6cdbf; }
   .home-cover img { width:100%; height:100%; object-fit:cover; }
@@ -180,6 +171,5 @@
   .clipboard-stats { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:auto; font-size:9px; color:#777; }
   .widget-status { display:flex; align-items:center; justify-content:space-between; gap:10px; flex:none; min-height:18px; font-size:8px; color:#686868; padding:0 3px; }
   .widget-status > span,.widget-status button { display:flex; align-items:center; gap:5px; }
-  kbd { font:inherit; color:#b8b8b8; padding:2px 5px; border:1px solid #2b2b2b; border-radius:5px; }
   .widget-status button { border:0; padding:3px 0; background:none; color:#888; font-size:9px; }
 </style>
