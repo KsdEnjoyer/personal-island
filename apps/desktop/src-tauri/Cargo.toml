@@ -14,7 +14,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
 serde.workspace = true
 serde_json.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["native-tls", "system-proxy", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "system-proxy", "json"] }
 task-core = { path = "../../../crates/task-core" }
 tokio.workspace = true
 sqlx.workspace = true
