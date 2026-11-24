@@ -27,7 +27,7 @@ windows = { version = "0.62", features = ["Media_Control", "Storage_Streams", "F
 
 [dev-dependencies]
 tempfile = "3"
-windows = { version = "0.62", features = ["Media_Playback", "Media_Core", "Storage", "Foundation"] }
+windows = { version = "0.62", features = ["Media_Playback", "Media_Core", "Storage", "Foundation", "Foundation_Collections"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -21,7 +21,9 @@ export type NewTask = {
 
 export type ClipboardEntry = { id: number; kind: 'text' | 'image' | 'files'; text: string | null; thumbnail: string | null; width: number | null; height: number | null; pinned: boolean; captured_at: number; files?: { name: string; path: string }[] };
 export type ClipboardHistory = { enabled: boolean; entries: ClipboardEntry[] };
-export type MediaState = { sessions: { id: string; label: string }[]; session_id: string | null; source: string; title: string; artist: string; artwork: string | null; playing: boolean; position: number; duration: number; can_toggle: boolean; can_previous: boolean; can_next: boolean };
+export type MediaState = { sessions: { id: string; label: string }[]; session_id: string | null; source: string; title: string; artist: string; artwork: string | null; playing: boolean; position: number; duration: number; can_toggle: boolean; can_previous: boolean; can_next: boolean; can_seek: boolean };
+export type IslandShortcut = { key: number; ctrl: boolean; alt: boolean; shift: boolean };
+export type WidgetSettings = { shortcut: IslandShortcut; suppress_shortcut_character: boolean; review_interval_minutes: number; shortcut_error?: string | null };
 export type WeatherData = {
   city: string; fetched_at: number;
   current: { time: number; temperature_2m: number; apparent_temperature: number; relative_humidity_2m: number; is_day: number; weather_code: number; wind_speed_10m: number; wind_direction_10m?: number | null; precipitation?: number | null };

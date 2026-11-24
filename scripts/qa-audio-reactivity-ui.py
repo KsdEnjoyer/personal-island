@@ -1,5 +1,5 @@
 """Measured-audio canvas response, onset/decay and hidden/reduced-motion gating."""
-import json
+import json,sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 
@@ -17,6 +17,10 @@ with sync_playwright() as p:
     errors=[]
     page.on('pageerror',lambda error:errors.append(str(error)))
     page.add_init_script((ROOT/'scripts/qa-ipc.js').read_text(encoding='utf8'))
+    if '--liquid-off' in sys.argv:
+        # A pre-existing profile can disable the ambient edge without opting
+        # out of a music equalizer. This was the real regression trigger.
+        page.add_init_script("localStorage.setItem('personal-island.appearance.v1',JSON.stringify({style:'island',liquid:false}))")
     page.goto('http://127.0.0.1:1420/')
     expect(page.locator('.island-shell')).to_have_attribute('data-shortcut-ready','true')
     page.mouse.move(5,180)
@@ -101,7 +105,25 @@ with sync_playwright() as p:
     page.wait_for_timeout(800)
     assert page.evaluate('hiddenDraws')<=2
     passed('Pause, reduced motion and hiding disable audio analysis; a hidden island does not keep an ambient RAF loop running')
+    page.set_viewport_size({'width':760,'height':520})
+    page.evaluate("qaReveal('manual')")
+    page.locator('.compact-stage .compact-open').first.click()
+    page.get_by_role('button',name='Настройки',exact=True).click()
+    page.get_by_label('Жидкий край',exact=True).uncheck()
+    page.wait_for_function('qaAudioEnabled===true')
+    equalizer=page.get_by_label('Эквалайзер музыки',exact=True)
+    expect(equalizer).to_be_checked()
+    equalizer.uncheck()
+    page.wait_for_function('qaAudioEnabled===false')
+    saved=page.evaluate("JSON.parse(localStorage.getItem('personal-island.appearance.v1'))")
+    assert saved['liquid'] is False and saved['equalizer'] is False,saved
+    equalizer.check()
+    page.wait_for_function('qaAudioEnabled===true')
+    saved=page.evaluate("JSON.parse(localStorage.getItem('personal-island.appearance.v1'))")
+    assert saved['liquid'] is False and saved['equalizer'] is True,saved
+    passed('The equalizer works with the ambient edge disabled, and its own setting persists independently')
     assert not errors,errors
     browser.close()
 
-(OUT/'audio-reactivity-ui-results.json').write_text(json.dumps(RESULTS,indent=2),encoding='utf8')
+name='audio-reactivity-no-liquid-results.json' if '--liquid-off' in sys.argv else 'audio-reactivity-ui-results.json'
+(OUT/name).write_text(json.dumps(RESULTS,indent=2),encoding='utf8')

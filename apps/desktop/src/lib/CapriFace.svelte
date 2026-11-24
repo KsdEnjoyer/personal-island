@@ -2,6 +2,7 @@
   import { Clock3, Music2, Pause, Play, SkipBack, SkipForward } from 'lucide-svelte';
   import mask from '../assets/capri-mask.svg';
   import WeatherIcon from './WeatherIcon.svelte';
+  import PlayerVolume from './PlayerVolume.svelte';
   import { degrees } from './weather';
   import type { MediaState, WeatherState } from '../types';
   export let now: Date;
@@ -15,6 +16,8 @@
   export let announcement = '';
   export let open: () => void;
   export let mediaCommand: (action: string) => Promise<boolean>;
+  export let volumeOpen = false;
+  export let reducedMotion = false;
   $: clock = now.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
   $: countdown = `${Math.floor(focusSeconds / 60).toString().padStart(2,'0')}:${(focusSeconds % 60).toString().padStart(2,'0')}`;
 </script>
@@ -32,10 +35,12 @@
   {#if playback && media}
     <div class="capri-player" role="group" aria-label="Управление музыкой Капри">
       <button class="capri-skip" aria-label="Предыдущий трек" disabled={mediaBusy || !media.can_previous} on:click={() => mediaCommand('previous')}><SkipBack size={13} fill="currentColor"/></button>
-      <button class="capri-cover" class:paused={!media.playing} aria-label={media.playing ? 'Приостановить музыку' : 'Продолжить музыку'} title={`${media.title || 'Без названия'} — ${media.artist || media.source}`} disabled={mediaBusy || !media.can_toggle} on:click={() => mediaCommand('toggle')}>
+      <PlayerVolume sessionId={media.session_id || ''} wheelOnly bind:open={volumeOpen} detached detachedOffset={14} {reducedMotion}>
+      <button class="capri-cover" class:paused={!media.playing} aria-label={media.playing ? 'Приостановить музыку' : 'Продолжить музыку'} title={`${media.title || 'Без названия'} — ${media.artist || media.source} · Колёсико — громкость`} disabled={mediaBusy || !media.can_toggle} on:click={() => mediaCommand('toggle')}>
         {#if media.artwork}<img src={media.artwork} alt="Обложка текущего трека"/>{:else}<Music2 size={17}/>{/if}
         <span class="cover-action" aria-hidden="true">{#if media.playing}<Pause size={12} fill="currentColor"/>{:else}<Play size={12} fill="currentColor"/>{/if}</span>
       </button>
+      </PlayerVolume>
       <button class="capri-skip" aria-label="Следующий трек" disabled={mediaBusy || !media.can_next} on:click={() => mediaCommand('next')}><SkipForward size={13} fill="currentColor"/></button>
     </div>
   {/if}

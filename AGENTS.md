@@ -17,6 +17,7 @@ This is a personal tasks desktop application for Windows 10/11, built with Rust 
 - All data stays local by default. Do not add public HTTP endpoints without authentication and the user's request.
 
 ## Development
+- Keep proposed changes local for the user's review. Do not commit or push them to the public repository until the user explicitly accepts the changes and authorizes publication.
 - Run `cargo test -p task-core` and `cargo check -p task-mcp` for Rust changes.
 - Build Svelte using `npm run build` from `apps/desktop`.
 - On Windows run Tauri with `npm run tauri dev` from `apps/desktop`.

@@ -4,8 +4,9 @@
   import { listen } from '@tauri-apps/api/event';
   import { ArrowUpRight, ExternalLink, ListTodo, Timer, Music2, CloudSun, NotebookPen, Clipboard, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, SlidersHorizontal } from 'lucide-svelte';
   import WeatherIcon from './WeatherIcon.svelte';
+  import { reviewLabel } from './widget-settings';
   import { degrees, weatherLabel } from './weather';
-  import type { Task, MediaState, WeatherState } from '../types';
+  import type { Task, MediaState, WeatherState, WidgetSettings } from '../types';
   export let active = false;
   export let tasks:Task[];
   export let now:Date;
@@ -15,7 +16,7 @@
   export let focusSeconds:number;
   export let focusTotalSeconds:number;
   export let timerRunning:boolean;
-  export let shortcutReady:boolean;
+  export let widgetSettings:WidgetSettings;
   export let pinned:boolean;
   export let reducedMotion:boolean;
   export let mediaBusy:boolean;
@@ -108,7 +109,7 @@
       <span class="card-heading"><span class="card-title"><Clipboard size={13}/>Буфер обмена</span><span class="capture-status" class:paused={summary?.capturing===false}><i></i>{summaryError ? 'Нет данных' : summary ? summary.capturing ? 'Запись' : 'Пауза' : '…'}</span></span><span class="clipboard-stats"><span>{recordCount(summaryError ? undefined : summary?.clipboard)}</span><span>{summaryError ? '—' : summary?.pinned ?? '—'} закреплено</span></span>
     </button>
   </div>
-  <div class="widget-status"><span title={shortcutReady ? 'Клавиша под Escape показывает островок' : 'Горячая клавиша недоступна'}><kbd>Ё / `</kbd>{shortcutReady ? 'Показать' : 'Недоступно'}</span><span>Автопоказ · в :00 и :30</span><button aria-label="Открыть настройки виджета" on:click={openSettings}><SlidersHorizontal size={11}/>Настройки</button></div>
+  <div class="widget-status"><span>{reviewLabel(widgetSettings.review_interval_minutes)}</span><button aria-label="Открыть настройки виджета" on:click={openSettings}><SlidersHorizontal size={11}/>Настройки</button></div>
 </section>
 
 <style>
@@ -180,6 +181,5 @@
   .clipboard-stats { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:auto; font-size:9px; color:#777; }
   .widget-status { display:flex; align-items:center; justify-content:space-between; gap:10px; flex:none; min-height:18px; font-size:8px; color:#686868; padding:0 3px; }
   .widget-status > span,.widget-status button { display:flex; align-items:center; gap:5px; }
-  kbd { font:inherit; color:#b8b8b8; padding:2px 5px; border:1px solid #2b2b2b; border-radius:5px; }
   .widget-status button { border:0; padding:3px 0; background:none; color:#888; font-size:9px; }
 </style>

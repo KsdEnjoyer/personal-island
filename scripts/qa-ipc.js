@@ -62,6 +62,7 @@
     if (cmd === 'set_audio_reactivity') { window.qaAudioEnabled=args.enabled; return; }
     if (cmd === 'get_weather') return structuredClone(window.qaWeather);
     if (cmd === 'player_volume') {
+      if (args.level === null && window.qaVolumeReadDelay) await new Promise(resolve=>setTimeout(resolve,window.qaVolumeReadDelay));
       if (args.level !== null && window.qaVolumeDelay) await new Promise(resolve=>setTimeout(resolve,window.qaVolumeDelay));
       window.qaVolume = args.level ?? window.qaVolume ?? .65;
       return { available: window.qaVolumeAvailable !== false, level: window.qaVolume, muted: false, scope: 'player' };
