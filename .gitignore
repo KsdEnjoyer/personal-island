@@ -33,6 +33,7 @@ __pycache__/
 id_rsa*
 id_ed25519*
 owner.json
+widget-settings.json
 process.json
 *.pid
 *.log

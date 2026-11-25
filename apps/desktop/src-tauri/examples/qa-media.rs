@@ -2,11 +2,12 @@
 #[cfg(windows)]
 use windows::{
     core::HSTRING,
-    Foundation::Uri,
+    Foundation::{TypedEventHandler, Uri},
     Media::{
         Core::MediaSource,
         MediaPlaybackType,
         Playback::{MediaPlaybackItem, MediaPlaybackList, MediaPlayer},
+        PlaybackPositionChangeRequestedEventArgs, SystemMediaTransportControls,
     },
     Storage::{StorageFile, Streams::RandomAccessStreamReference},
     Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED},
@@ -17,6 +18,13 @@ fn main() -> windows::core::Result<()> {
         RoInitialize(RO_INIT_MULTITHREADED)?;
     }
     let folder = std::path::PathBuf::from(std::env::args().nth(1).expect("fixture folder"));
+    if let Ok(identity) = std::env::var("PERSONAL_ISLAND_QA_MEDIA_ID") {
+        unsafe {
+            windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(
+                format!("qa-media.{identity}"),
+            ))?;
+        }
+    }
     let cover = StorageFile::GetFileFromPathAsync(&HSTRING::from(
         folder.join("cover.png").to_string_lossy().as_ref(),
     ))?
@@ -48,8 +56,41 @@ fn main() -> windows::core::Result<()> {
     controls.SetIsEnabled(true)?;
     controls.SetIsNextEnabled(true)?;
     controls.SetIsPreviousEnabled(true)?;
+    let playback = player.PlaybackSession()?;
+    let diagnostic = folder.join("seek-received.txt");
+    let seek_handler = TypedEventHandler::<
+        SystemMediaTransportControls,
+        PlaybackPositionChangeRequestedEventArgs,
+    >::new(move |_, args| {
+        if let Some(args) = args.as_ref() {
+            let _ = std::fs::write(
+                &diagnostic,
+                args.RequestedPlaybackPosition()?.Duration.to_string(),
+            );
+            playback.SetPosition(args.RequestedPlaybackPosition()?)?;
+        }
+        Ok(())
+    });
+    let _seek_token = controls.PlaybackPositionChangeRequested(&seek_handler)?;
     player.Play()?;
     while !folder.join("stop-media").exists() {
+        if let Ok(position) = player
+            .PlaybackSession()
+            .and_then(|session| session.Position())
+        {
+            let _ = std::fs::write(
+                folder.join("media-position.txt"),
+                position.Duration.to_string(),
+            );
+        }
+        if folder.join("pause-media").exists() {
+            let _ = std::fs::remove_file(folder.join("pause-media"));
+            player.Pause()?;
+        }
+        if folder.join("resume-media").exists() {
+            let _ = std::fs::remove_file(folder.join("resume-media"));
+            player.Play()?;
+        }
         if folder.join("mute-session").exists() {
             let _ = std::fs::remove_file(folder.join("mute-session"));
             mute_audio_session()?;

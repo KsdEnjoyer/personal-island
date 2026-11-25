@@ -34,6 +34,7 @@ export function createLiquidIsland(canvas: HTMLCanvasElement, options: Options) 
   let transitionStarted = 0;
   let reducedMotion = options.reducedMotion;
   let liquid = options.liquid;
+  let equalizer = true;
   let layoutWidth = -1;
   let layoutHeight = -1;
   let fill = '#000';
@@ -100,7 +101,8 @@ export function createLiquidIsland(canvas: HTMLCanvasElement, options: Options) 
       const amplitude = 38 * Math.tanh((energy * (20 + impact * 24) + bass * 7) / 34);
       const inward = 4 * (1 - Math.exp(-amplitude / 8));
       const spectrum = ((amplitude - inward) / 2 + carrier * (amplitude + inward) / 2) * music.value;
-      wave.push([x + radius + u * (w - radius * 2), h - 2 + (liquid && !reducedMotion ? (idle * (1 - music.value * .96) + attraction + ripple + spectrum) * edge : 0)]);
+      const ambient = liquid ? idle * (1 - music.value * .96) + attraction + ripple : 0;
+      wave.push([x + radius + u * (w - radius * 2), h - 2 + (!reducedMotion ? (ambient + spectrum) * edge : 0)]);
     }
     ctx.beginPath();
     ctx.moveTo(x - shoulder, 0);
@@ -123,11 +125,11 @@ export function createLiquidIsland(canvas: HTMLCanvasElement, options: Options) 
     ctx.moveTo(wave[0][0], wave[0][1]);
     traceEdge(wave);
     ctx.lineWidth = (expanded ? 1.4 : 2) + impact * music.value * .6;
-    ctx.strokeStyle = pulse > .05 ? `rgba(255,177,42,${.2 + pulse * .35})` : music.value > .05 && !reducedMotion && liquid ? `rgba(160,213,180,${.25 + music.value * .3 + impact * .18})` : edge;
+    ctx.strokeStyle = pulse > .05 ? `rgba(255,177,42,${.2 + pulse * .35})` : music.value > .05 && !reducedMotion && equalizer ? `rgba(160,213,180,${.25 + music.value * .3 + impact * .18})` : edge;
     ctx.lineCap = 'round';
     // A restrained halo follows the hit; it never changes the body shadow.
     ctx.shadowColor = 'rgba(160,213,180,.35)';
-    ctx.shadowBlur = liquid && !reducedMotion ? impact * music.value * 4 : 0;
+    ctx.shadowBlur = equalizer && !reducedMotion ? impact * music.value * 4 : 0;
     ctx.stroke();
     ctx.shadowBlur = 0;
     // Only expand/collapse springs change the body and its DOM hitbox.
@@ -179,7 +181,7 @@ export function createLiquidIsland(canvas: HTMLCanvasElement, options: Options) 
     }
     // Keep the idle edge alive, pause completely when WebView is hidden.
     const moving = Math.abs(width.value - width.target) > .1 || Math.abs(height.value - height.target) > .1;
-    if (!document.hidden && ((shown && !reducedMotion && liquid) || moving || settle)) frame = requestAnimationFrame(tick);
+    if (!document.hidden && ((shown && !reducedMotion && (liquid || music.target > 0 || music.value > .01)) || moving || settle)) frame = requestAnimationFrame(tick);
     else frame = 0;
   }
 
@@ -196,7 +198,7 @@ export function createLiquidIsland(canvas: HTMLCanvasElement, options: Options) 
       audio = {available:!!input?.available,bands:Array.from({length:10},(_,i)=>unit(input?.bands?.[i])),
         bass:unit(input?.bass),level:unit(input?.level),impact:unit(input?.impact)};
       audioAt = performance.now();
-      if (shown && liquid && !reducedMotion) wake();
+      if (shown && (liquid || music.target > 0) && !reducedMotion) wake();
     },
     setPalette(background: string, stroke: string) {
       if (fill === background && edge === stroke) return;
@@ -241,7 +243,10 @@ export function createLiquidIsland(canvas: HTMLCanvasElement, options: Options) 
       settle(); settle = undefined;
     },
     celebrate() { pulse = 1; pull.velocity += 45; },
-    configure(reduced: boolean, enabled: boolean, playing = false, visible = true) { reducedMotion = reduced; liquid = enabled; shown = visible; music.target = playing ? 1 : 0; wake(); },
+    configure(reduced: boolean, enabled: boolean, playing = false, visible = true, reactive = true) {
+      reducedMotion = reduced; liquid = enabled; equalizer = reactive; shown = visible;
+      music.target = playing && equalizer ? 1 : 0; wake();
+    },
     destroy() {
       disposed = true;
       cancelAnimationFrame(frame);

@@ -20,8 +20,7 @@
 .timer-value { font-size:23px; }
 .focus-caption { font-size:9px; }
 .reminders { min-height:0; overflow:auto; scrollbar-width:thin; flex:1; }
-.notes-workspace .timer-presets { display:none; }
-.notes-workspace .reminders-heading { margin-top:7px; }
+.notes-workspace { grid-template-columns:minmax(0,1fr) 192px; }
 .notes-loading { background:#101010; border-radius:17px; padding:20px; color:#888; font-size:12px; }
 .compact-stage { position:absolute; top:0; left:50%; width:272px; height:56px; transform:translateX(-50%); transition:opacity 140ms,filter 160ms; }
 .compact-stage.wide { width:432px; height:148px; }
@@ -62,6 +61,10 @@
 .track-source-row { display:flex; align-items:center; gap:12px; }
 .track-source-row .source-select { flex:1; min-width:0; }
 .music-pill { grid-template-columns:minmax(0,1fr) 80px minmax(0,1fr); gap:6px; }
+.settings-panel { width:294px; max-height:calc(100% - 76px); overflow:auto; color-scheme:dark; scrollbar-width:thin; scrollbar-color:#4e5b51 transparent; }
+.settings-panel::-webkit-scrollbar { width:4px; }
+.settings-panel::-webkit-scrollbar-track { background:transparent; }
+.settings-panel::-webkit-scrollbar-thumb { background:#4e5b51; border-radius:4px; }
 .music-pill:active:not(:disabled) { transform:translateX(-50%); }
 .compact-open { border:0; padding:0; background:none; min-width:0; text-align:left; }
 .compact-playback { display:flex; gap:3px; align-items:center; justify-content:center; }

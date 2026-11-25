@@ -5,6 +5,8 @@
   import type { Task, WeatherState } from '../types';
   import MonthCalendar from './MonthCalendar.svelte';
   import WeatherIcon from './WeatherIcon.svelte';
+  import FormattedInput from './FormattedInput.svelte';
+  import FormattedText from './FormattedText.svelte';
   import { degrees } from './weather';
   import { dayKey, startOfWeek, addDays, localInput, minutesOfDay, timeLabel, taskColor, layoutDeadlines } from './calendar';
   export let tasks:Task[];
@@ -84,7 +86,7 @@
   function inspect(task:Task) { current = task; when = localInput(new Date(task.due_at!)); modal = 'detail'; error = ''; deleteConfirm = false; void tick().then(()=>window.document.querySelector<HTMLElement>('.calendar-dialog')?.focus()); }
   function dialogKeys(event:KeyboardEvent) {
     if(event.key !== 'Tab') return;
-    const items = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled)')];
+    const items = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),[contenteditable="true"]')];
     const first = items[0], last = items[items.length-1];
     if(event.shiftKey && (window.document.activeElement === first || window.document.activeElement === event.currentTarget)) { event.preventDefault();last?.focus(); }
     else if(!event.shiftKey && window.document.activeElement === last) { event.preventDefault();first?.focus(); }
@@ -130,11 +132,13 @@
   }
   async function addNote() {
     if(noteBusy || !quickText.trim()) return; noteBusy = true; noteError = '';
-    const lines = quickText.trim().split('\n');
-    const heading = lines[0].slice(0,100);
-    const body = [lines[0].slice(100),...lines.slice(1)].filter(Boolean).join('\n');
-    const document = JSON.stringify({type:'doc',content:body ? body.split('\n').map(text=>({type:'paragraph',content:text ? [{type:'text',text}] : []})) : [{type:'paragraph'}]});
-    try { await invoke('save_note',{id:null,revision:0,note:{category:'notes',title:heading,document}}); quickText = ''; quickOpen = false; await readNotes(); }
+    try {
+      const {richText} = await import('./rich-text');
+      const rich = richText(quickText);
+      const heading = rich.text.split('\n').find(line=>line.trim())?.slice(0,100) || 'Новая заметка';
+      const document = JSON.stringify(rich.document);
+      await invoke('save_note',{id:null,revision:0,note:{category:'notes',title:heading,document}}); quickText = ''; quickOpen = false; await readNotes();
+    }
     catch(err) { noteError = String(err); }
     finally { noteBusy = false; }
   }
@@ -213,13 +217,13 @@
     </section>
     <section class="day-checklist calendar-surface"><div class="right-heading"><h2>Задачи на день</h2><span>{finished} из {dayTasks.length}</span><svg viewBox="0 0 30 30" class="day-progress" aria-label={`Выполнено ${finished} из ${dayTasks.length}`}><circle cx="15" cy="15" r="11"/><circle cx="15" cy="15" r="11" pathLength="1" stroke-dasharray="1" stroke-dashoffset={1-(dayTasks.length ? finished/dayTasks.length : 0)}/></svg></div><div class="day-tasks">{#each dayTasks as task}<button class:completed={task.status === 'done'} aria-label={`${task.status === 'done' ? 'Вернуть' : 'Завершить'}: ${task.title}`} disabled={busy} on:click={()=>complete(task)}><span class="day-check">{#if task.status === 'done'}<Check size={12}/>{/if}</span><b>{task.title}</b></button>{:else}<span class="small-empty">Здесь будут дела выбранного дня.</span>{/each}</div></section>
     <section class="day-notifications calendar-surface"><div class="right-heading"><h2><Bell size={17}/>Напоминания</h2><button aria-label="Новое напоминание в календаре" on:click={()=>create()}><Plus size={17}/></button></div><div class="day-reminder-list">{#each dayReminders as task}<button on:click={()=>inspect(task)}><Bell size={15}/><b>{task.title}</b><time>{timeLabel(new Date(task.reminder_at!))}</time></button>{:else}<span class="small-empty">Напоминаний на этот день нет.</span>{/each}</div></section>
-    <section class="calendar-quick-notes calendar-surface"><div class="right-heading"><h2><NotebookPen size={17}/>Быстрые заметки</h2><button aria-label="Открыть все заметки" on:click={openNotes}><ArrowUpRight size={17}/></button></div>{#if noteError}<p class="calendar-error" role="alert">{noteError}<button on:click={readNotes}>Повторить</button></p>{/if}{#if !quickOpen}<div class="quick-note-list">{#each savedNotes as note}<button on:click={openNotes}><i></i>{note.title || 'Без названия'}</button>{:else}{#if !quickOpen}<span class="small-empty">Нет заметок</span>{/if}{/each}</div>{/if}{#if quickOpen}<form class="calendar-note-form" on:submit|preventDefault={addNote}><textarea aria-label="Быстрая заметка календаря" placeholder="Что запомнить?" rows="2" maxlength="2000" bind:value={quickText}></textarea><div><button type="button" on:click={()=>quickOpen = false}>Отмена</button><button disabled={noteBusy || !quickText.trim()}>Сохранить</button></div></form>{:else}<button class="quick-note-add" on:click={()=>quickOpen = true}><Plus size={12}/>Записать мысль</button>{/if}</section>
+    <section class="calendar-quick-notes calendar-surface"><div class="right-heading"><h2><NotebookPen size={17}/>Быстрые заметки</h2><button aria-label="Открыть все заметки" on:click={openNotes}><ArrowUpRight size={17}/></button></div>{#if noteError}<p class="calendar-error" role="alert">{noteError}<button on:click={readNotes}>Повторить</button></p>{/if}{#if !quickOpen}<div class="quick-note-list">{#each savedNotes as note}<button on:click={openNotes}><i></i>{note.title || 'Без названия'}</button>{:else}{#if !quickOpen}<span class="small-empty">Нет заметок</span>{/if}{/each}</div>{/if}{#if quickOpen}<form class="calendar-note-form" on:submit|preventDefault={addNote}><FormattedInput label="Быстрая заметка календаря" placeholder="Что запомнить?" maxLength={2000} bind:value={quickText} disabled={noteBusy}/><div><button type="button" on:click={()=>quickOpen = false}>Отмена</button><button disabled={noteBusy || !quickText.trim()}>Сохранить</button></div></form>{:else}<button class="quick-note-add" on:click={()=>quickOpen = true}><Plus size={12}/>Записать мысль</button>{/if}</section>
   </aside>
 
   {/if}
   {#if modal}<div class="calendar-modal" role="presentation"><div class="calendar-dialog" on:keydown={dialogKeys} role="dialog" aria-modal="true" aria-label={modal === 'new' ? 'Новое событие календаря' : 'Событие календаря'} tabindex="-1"><div class="dialog-title"><span><CalendarDays size={17}/>{modal === 'new' ? 'Новое событие' : 'Детали события'}</span><button aria-label="Закрыть событие" disabled={busy} on:click={()=>modal = null}><X size={17}/></button></div>{#if error}<p class="calendar-error" role="alert">{error}</p>{/if}
-    {#if modal === 'new'}<form class="calendar-event-form" on:submit|preventDefault={save}><input name="title" aria-label="Название события" placeholder="Что запланировать?" maxlength="200" bind:value={title}/><label><Clock3 size={15}/><span>Дата и время</span><input aria-label="Время события" type="datetime-local" required bind:value={when}/></label><textarea aria-label="Описание события" placeholder="Детали, которые пригодятся" rows="3" maxlength="10000" bind:value={notes}></textarea><label><Flag size={15}/><span>Приоритет</span><select aria-label="Приоритет события" bind:value={priority}><option value={0}>Обычный</option><option value={1}>Важный</option><option value={2}>Срочный</option></select></label><p class="event-help"><Bell size={12}/>Срок задачи · напомним за 30 минут</p><button class="event-submit" disabled={busy || !title.trim()}>{busy ? 'Сохраняю…' : 'Добавить событие'}</button></form>
-    {:else if current}<div class="calendar-event-detail"><h3>{current.title}</h3>{#if current.notes}<p class="detail-notes">{current.notes}</p>{/if}<span class={`detail-priority ${taskColor(current)}`}>{current.priority === 2 ? 'Срочная задача' : current.priority === 1 ? 'Важная задача' : 'Обычная задача'}</span><label>Срок задачи<input aria-label="Новый срок события" type="datetime-local" bind:value={when}/></label><button class="event-submit" disabled={busy} on:click={reschedule}>Сохранить срок</button><div class="detail-actions"><button disabled={busy} on:click={()=>current && complete(current)}><Check size={14}/>{current.status === 'done' ? 'Вернуть в работу' : 'Завершить'}</button><button disabled={busy} on:click={()=>deleteConfirm = true}><Trash2 size={14}/>Удалить</button></div>{#if deleteConfirm}<div class="event-delete-confirm"><b>Удалить задачу навсегда?</b><button on:click={()=>deleteConfirm = false}>Отмена</button><button disabled={busy} on:click={remove}>Да, удалить</button></div>{/if}</div>{/if}
+    {#if modal === 'new'}<form class="calendar-event-form" on:submit|preventDefault={save}><input name="title" aria-label="Название события" placeholder="Что запланировать?" maxlength="200" bind:value={title}/><label><Clock3 size={15}/><span>Дата и время</span><input aria-label="Время события" type="datetime-local" required bind:value={when}/></label><FormattedInput label="Описание события" placeholder="Детали, которые пригодятся" bind:value={notes} disabled={busy}/><label><Flag size={15}/><span>Приоритет</span><select aria-label="Приоритет события" bind:value={priority}><option value={0}>Обычный</option><option value={1}>Важный</option><option value={2}>Срочный</option></select></label><p class="event-help"><Bell size={12}/>Срок задачи · напомним за 30 минут</p><button class="event-submit" disabled={busy || !title.trim()}>{busy ? 'Сохраняю…' : 'Добавить событие'}</button></form>
+    {:else if current}<div class="calendar-event-detail"><h3>{current.title}</h3>{#if current.notes}<div class="detail-notes"><FormattedText value={current.notes}/></div>{/if}<span class={`detail-priority ${taskColor(current)}`}>{current.priority === 2 ? 'Срочная задача' : current.priority === 1 ? 'Важная задача' : 'Обычная задача'}</span><label>Срок задачи<input aria-label="Новый срок события" type="datetime-local" bind:value={when}/></label><button class="event-submit" disabled={busy} on:click={reschedule}>Сохранить срок</button><div class="detail-actions"><button disabled={busy} on:click={()=>current && complete(current)}><Check size={14}/>{current.status === 'done' ? 'Вернуть в работу' : 'Завершить'}</button><button disabled={busy} on:click={()=>deleteConfirm = true}><Trash2 size={14}/>Удалить</button></div>{#if deleteConfirm}<div class="event-delete-confirm"><b>Удалить задачу навсегда?</b><button on:click={()=>deleteConfirm = false}>Отмена</button><button disabled={busy} on:click={remove}>Да, удалить</button></div>{/if}</div>{/if}
   </div></div>{/if}
 </section>
 
@@ -247,7 +251,7 @@
   .open-week-planner > :global(svg:last-child) { margin-left:auto; }
   .calendar-board { display:grid;grid-template-columns:188px minmax(0,1fr) 228px;gap:10px;flex:1;min-height:0;position:relative; }
   .calendar-surface { border-radius:20px; background:var(--surface,#101010); min-width:0; min-height:0; }
-  button,input,select,textarea { font-family:inherit; }
+  button,input,select { font-family:inherit; }
   .calendar-left { padding:15px 12px; display:flex; flex-direction:column; overflow:auto; scrollbar-width:thin; }
   .new-event { display:flex;align-items:center;justify-content:center;gap:6px;background:#e9e9e9;border:0;border-radius:13px;padding:11px 6px;font-size:11px;font-weight:600;color:#111;flex:none;margin-bottom:22px; }
   .new-event:hover { filter:brightness(1.12); }
@@ -389,8 +393,8 @@
   .quick-note-list i { width:3px; height:3px; border-radius:50%; background:#b3b3b3; flex:none; }
   .small-empty { display:block; color:#7f7f7f; font-size:10px; line-height:1.7; }
   .quick-note-add { display:flex; align-items:center; gap:5px; color:#8c8c8c; background:none; border:0; padding:12px 0 0; font-size:9px; }
-  .calendar-note-form textarea { width:100%; margin-top:8px; min-width:0; background:#272727; border:1px solid #4d4d4d; color:#d5d5d5; border-radius:8px; padding:7px; font-size:10px; resize:vertical; max-height:110px; }
-  .calendar-note-form > div { display:flex; justify-content:space-between; gap:6px; }
+  .calendar-note-form :global(.formatted-input) { margin-top:8px; max-height:110px; }
+  .calendar-note-form > div:not(:global(.formatted-input)) { display:flex; justify-content:space-between; gap:6px; }
   .calendar-note-form button { background:#333333; color:#d0d0d0; border:0; border-radius:6px; padding:5px; font-size:9px; }
   .calendar-error { display:flex; align-items:center; gap:5px; background:#33333366; color:#c0c0c0; border-radius:7px; padding:8px; font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
   .calendar-error button { color:inherit; background:none; border:0; margin-left:auto; font-size:10px; }
@@ -399,8 +403,7 @@
   .dialog-title,.dialog-title span { display:flex; align-items:center; justify-content:space-between; gap:8px; color:#dadada; font-size:13px; font-weight:600; }
   .dialog-title button { display:grid; place-items:center; background:none; border:0; padding:0; color:#949494; }
   .calendar-event-form,.calendar-event-detail { display:flex; flex-direction:column; gap:12px; margin-top:19px; }
-  .calendar-dialog input,.calendar-dialog select,.calendar-dialog textarea { width:100%; background:#0e0e0e; border:1px solid #484848; border-radius:9px; padding:9px; color:#d9d9d9; font-size:11px; color-scheme:dark; min-width:0; }
-  .calendar-dialog textarea { resize:vertical; max-height:140px; }
+  .calendar-dialog input,.calendar-dialog select { width:100%; background:#0e0e0e; border:1px solid #484848; border-radius:9px; padding:9px; color:#d9d9d9; font-size:11px; color-scheme:dark; min-width:0; }
   .calendar-dialog input[name="title"] { font-size:14px; font-weight:550; padding:10px; }
   .calendar-event-form label { display:flex; align-items:center; gap:6px; color:#a8a8a8; font-size:10px; }
   .calendar-event-form label > span { flex:none; }

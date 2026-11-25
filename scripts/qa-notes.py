@@ -30,7 +30,7 @@ with sync_playwright() as p:
     edit.fill('Записать ролик')
     edit.press('Control+a')
     for label,selector in [('Жирный','strong'),('Курсив','em'),('Зачёркнутый','s'),('Выделить цветом','mark')]:
-        page.get_by_role('button',name=label,exact=True).click();expect(edit.locator(selector)).to_have_text('Записать ролик')
+        page.locator('.note-toolbar').get_by_role('button',name=label,exact=True).click();expect(edit.locator(selector)).to_have_text('Записать ролик')
     page.get_by_role('button',name='Выделить синим').click()
     expect(edit.locator('mark')).to_have_attribute('data-color','#3d5772')
     assert edit.locator('em').evaluate("e=>getComputedStyle(e).fontStyle")=='italic'
@@ -88,14 +88,9 @@ with sync_playwright() as p:
     assert page.evaluate('qaTasks.at(-1).title')=='Позвонить маме'
     page.get_by_role('button',name='Закрыть выбор времени').click();quick.fill('')
     passed('Note reminders use the selected deadline; quick Russian date input works and ambiguity asks for a date')
-    expect(page.locator('.timer-value')).to_have_text('25:00')
-    page.get_by_role('button',name='Добавить минуту').click();expect(page.locator('.timer-value')).to_have_text('26:00')
-    page.get_by_role('button',name='Запустить таймер').click();page.get_by_role('button',name='Добавить минуту').click()
-    assert page.locator('.timer-value').inner_text().startswith(('26:','27:'))
-    page.get_by_role('button',name='Приостановить таймер').click()
-    remaining=page.locator('.timer-value').inner_text();page.wait_for_timeout(1100);expect(page.locator('.timer-value')).to_have_text(remaining)
-    page.get_by_role('button',name='Сбросить таймер').click();expect(page.locator('.timer-value')).to_have_text('25:00')
-    passed('Focus timer starts, pauses, adds one minute while running/paused and resets')
+    expect(page.locator('.timer-dial,.timer-duration,.timer-presets')).to_have_count(0)
+    expect(page.locator('.focus-panel .reminders-heading')).to_be_visible()
+    passed('Notes leave space for writing and reminders without displaying focus timer controls')
     page.evaluate("qaFail='save_note'");title.fill('Несохранённая правка')
     page.get_by_role('button',name='Сегодня',exact=True).click()
     expect(page.locator('.note-error')).to_contain_text('QA simulated failure')
@@ -133,7 +128,7 @@ with sync_playwright() as p:
     page.get_by_role('button',name='Заметки',exact=True).click()
     page.get_by_label('Открыть запись').select_option(label='Выпуск в пятницу')
     expect(title).to_have_value('Выпуск в пятницу')
-    for selector in ['.note-toolbar','.note-title','.note-editor','.quick-reminder','.timer-secondary']:
+    for selector in ['.note-toolbar','.note-title','.note-editor','.quick-reminder','.reminders-heading']:
         rect=page.locator(selector).bounding_box();assert rect and 0<=rect['x'] and rect['x']+rect['width']<=760 and rect['y']+rect['height']<=490,(selector,rect)
     for item in edit.locator('li[data-checked]').all():
         delta=item.evaluate("el=>{const c=el.querySelector('input').getBoundingClientRect(),t=el.querySelector('p').getBoundingClientRect();return Math.abs(c.y+c.height/2-t.y-t.height/2)}")

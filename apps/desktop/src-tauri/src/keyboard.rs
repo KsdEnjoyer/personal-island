@@ -1,16 +1,19 @@
-//! Single presses type normally; a consecutive double tap removes the first
-//! character and consumes the second while keeping both island toggles.
+//! Default-key typing can pass through (with double-tap cleanup) or be suppressed.
+//! Both modes toggle the island once per press and preserve normal editor input.
+use crate::preferences::Shortcut;
 use std::cell::RefCell;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
     OnceLock,
 };
 use windows::Win32::{
     Foundation::{LPARAM, LRESULT, WPARAM},
     UI::{
         Input::KeyboardAndMouse::{
-            GetAsyncKeyState, GetKeyboardLayout, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD,
-            KEYBDINPUT, KEYEVENTF_KEYUP, VK_BACK, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+            GetAsyncKeyState, GetKeyboardLayout, RegisterHotKey, SendInput, UnregisterHotKey,
+            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, MOD_ALT, MOD_CONTROL,
+            MOD_NOREPEAT, MOD_SHIFT, VK_BACK, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
         },
         WindowsAndMessaging::*,
     },
@@ -19,6 +22,54 @@ static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
 static DOWN: AtomicBool = AtomicBool::new(false);
 static CONSUMED: AtomicBool = AtomicBool::new(false);
 pub static EDITING: AtomicBool = AtomicBool::new(false);
+pub static CAPTURING: AtomicBool = AtomicBool::new(false);
+static DEFAULT_ENABLED: AtomicBool = AtomicBool::new(true);
+static SUPPRESS_CHARACTER: AtomicBool = AtomicBool::new(false);
+static THREAD: AtomicU32 = AtomicU32::new(0);
+static REBIND: OnceLock<Sender<Rebind>> = OnceLock::new();
+const REBIND_MESSAGE: u32 = WM_APP + 19;
+struct Rebind {
+    shortcut: Shortcut,
+    suppress_character: bool,
+    reply: Sender<Result<(), String>>,
+}
+
+pub fn configure(shortcut: Shortcut, suppress_character: bool) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    if std::env::var("PERSONAL_ISLAND_QA_DISABLE_SHORTCUT").as_deref() == Ok("1") {
+        return Ok(());
+    }
+    let (send, receive) = mpsc::channel();
+    REBIND
+        .get()
+        .ok_or("Горячие клавиши ещё не готовы")?
+        .send(Rebind {
+            shortcut,
+            suppress_character,
+            reply: send,
+        })
+        .map_err(|e| e.to_string())?;
+    unsafe {
+        PostThreadMessageW(
+            THREAD.load(Ordering::SeqCst),
+            REBIND_MESSAGE,
+            WPARAM(0),
+            LPARAM(0),
+        )
+    }
+    .map_err(|e| e.to_string())?;
+    receive
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .map_err(|e| e.to_string())?
+}
+fn toggle() {
+    if let Some(app) = APP.get() {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::toggle_island_shortcut(app);
+        });
+    }
+}
 const DOUBLE_TAP_MS: u32 = 1500;
 const CLEANUP_TAG: usize = 0x49534c44;
 
@@ -119,7 +170,16 @@ unsafe extern "system" fn observe(code: i32, key: WPARAM, data: LPARAM) -> LRESU
             return CallNextHookEx(None, code, key, data);
         }
         let pressed = key.0 as u32 == WM_KEYDOWN || key.0 as u32 == WM_SYSKEYDOWN;
-        if event.scanCode == 0x29 || event.vkCode == 0xC0 {
+        // Finish swallowing an owned press even if its binding changes mid-hold.
+        if !pressed && (event.scanCode == 0x29 || event.vkCode == 0xC0) {
+            DOWN.store(false, Ordering::Relaxed);
+            if CONSUMED.swap(false, Ordering::Relaxed) {
+                return LRESULT(1);
+            }
+        }
+        if DEFAULT_ENABLED.load(Ordering::Relaxed)
+            && (event.scanCode == 0x29 || event.vkCode == 0xC0)
+        {
             if pressed {
                 if DOWN.swap(true, Ordering::Relaxed) {
                     // Holding the key is typing, not a second tap. Never erase
@@ -133,28 +193,26 @@ unsafe extern "system" fn observe(code: i32, key: WPARAM, data: LPARAM) -> LRESU
                 let modified = [VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN]
                     .iter()
                     .any(|key| GetAsyncKeyState(key.0 as i32) < 0);
-                if !modified && !EDITING.load(Ordering::Relaxed) {
-                    let target = input_target();
-                    let pair = DOUBLE_TAP.with(|tap| tap.borrow_mut().press(event.time, target));
-                    let consumed = pair && erase_first_press(target);
+                if !modified
+                    && !EDITING.load(Ordering::Relaxed)
+                    && !CAPTURING.load(Ordering::Relaxed)
+                {
+                    let consumed = if SUPPRESS_CHARACTER.load(Ordering::Relaxed) {
+                        DOUBLE_TAP.with(|tap| tap.borrow_mut().cancel());
+                        true
+                    } else {
+                        let target = input_target();
+                        let pair =
+                            DOUBLE_TAP.with(|tap| tap.borrow_mut().press(event.time, target));
+                        pair && erase_first_press(target)
+                    };
                     CONSUMED.store(consumed, Ordering::Relaxed);
-                    if let Some(app) = APP.get() {
-                        // Keep the hook fast. Window operations run outside the callback.
-                        let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let _ = crate::toggle_island_shortcut(app);
-                        });
-                    }
+                    toggle();
                     if consumed {
                         return LRESULT(1);
                     }
                 } else {
                     DOUBLE_TAP.with(|tap| tap.borrow_mut().cancel());
-                }
-            } else {
-                DOWN.store(false, Ordering::Relaxed);
-                if CONSUMED.swap(false, Ordering::Relaxed) {
-                    return LRESULT(1);
                 }
             }
         } else if pressed {
@@ -165,14 +223,22 @@ unsafe extern "system" fn observe(code: i32, key: WPARAM, data: LPARAM) -> LRESU
 }
 pub fn start(app: tauri::AppHandle) -> Result<(), String> {
     // Isolated UI suites must not react to the owner's typing in other apps.
-    // Release builds always install the pass-through observer.
+    // Release builds always install the keyboard observer.
     #[cfg(debug_assertions)]
     if std::env::var("PERSONAL_ISLAND_QA_DISABLE_SHORTCUT").as_deref() == Ok("1") {
         return Ok(());
     }
     let _ = APP.set(app);
+    let (rebind_send, rebind_receive) = mpsc::channel::<Rebind>();
+    let _ = REBIND.set(rebind_send);
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || unsafe {
+        let mut queue = MSG::default();
+        let _ = PeekMessageW(&mut queue, None, 0, 0, PM_NOREMOVE);
+        THREAD.store(
+            windows::Win32::System::Threading::GetCurrentThreadId(),
+            Ordering::SeqCst,
+        );
         let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(observe), None, 0);
         match hook {
             Ok(hook) => {
@@ -185,9 +251,64 @@ pub fn start(app: tauri::AppHandle) -> Result<(), String> {
                     }
                 };
                 let _ = send.send(Ok(()));
+                let mut active = Shortcut::default();
+                let mut registered = None;
                 let mut message = MSG::default();
                 while GetMessageW(&mut message, None, 0, 0).0 > 0 {
+                    if message.message == REBIND_MESSAGE {
+                        while let Ok(request) = rebind_receive.try_recv() {
+                            let result = if request.shortcut == active {
+                                Ok(())
+                            } else if request.shortcut.is_default() {
+                                if let Some(id) = registered.take() {
+                                    let _ = UnregisterHotKey(None, id);
+                                }
+                                DEFAULT_ENABLED.store(true, Ordering::SeqCst);
+                                active = request.shortcut;
+                                Ok(())
+                            } else {
+                                let id = if registered == Some(1) { 2 } else { 1 };
+                                let mut modifiers = MOD_NOREPEAT;
+                                if request.shortcut.ctrl {
+                                    modifiers |= MOD_CONTROL;
+                                }
+                                if request.shortcut.alt {
+                                    modifiers |= MOD_ALT;
+                                }
+                                if request.shortcut.shift {
+                                    modifiers |= MOD_SHIFT;
+                                }
+                                match RegisterHotKey(None, id, modifiers, request.shortcut.key) {
+                                    Ok(()) => {
+                                        if let Some(previous) = registered.replace(id) { let _ = UnregisterHotKey(None, previous); }
+                                        DEFAULT_ENABLED.store(false, Ordering::SeqCst);
+                                        active = request.shortcut;
+                                        Ok(())
+                                    }
+                                    Err(_) => Err("Это сочетание уже занято Windows или другим приложением. Выбери другое.".into()),
+                                }
+                            };
+                            if result.is_ok() {
+                                SUPPRESS_CHARACTER
+                                    .store(request.suppress_character, Ordering::Relaxed);
+                            }
+                            DOUBLE_TAP.with(|tap| tap.borrow_mut().cancel());
+                            let _ = request.reply.send(result);
+                        }
+                        continue;
+                    }
+                    if message.message == WM_HOTKEY {
+                        if registered == Some(message.wParam.0 as i32)
+                            && !CAPTURING.load(Ordering::Relaxed)
+                        {
+                            toggle();
+                        }
+                        continue;
+                    }
                     let _ = DispatchMessageW(&message);
+                }
+                if let Some(id) = registered {
+                    let _ = UnregisterHotKey(None, id);
                 }
                 let _ = UnhookWindowsHookEx(hook);
                 let _ = UnhookWindowsHookEx(mouse);

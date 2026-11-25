@@ -6,6 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT/'artifacts/qa'
 OUT.mkdir(parents=True,exist_ok=True)
 RESULTS = []
+SUPPRESSION_ONLY = '--suppression-only' in sys.argv
 user32.LoadKeyboardLayoutW.argtypes=[wintypes.LPCWSTR,wintypes.UINT]
 user32.LoadKeyboardLayoutW.restype=ctypes.c_void_p
 user32.GetKeyboardLayout.argtypes=[wintypes.DWORD]
@@ -37,7 +39,8 @@ def guard_focus():
     user32.GetWindowThreadProcessId(user32.GetForegroundWindow(),ctypes.byref(process))
     assert process.value in allowed_pids,'QA focus changed; refusing to type into another app'
 
-def press_reveal():
+def press_reveal(target_pid=None):
+    if target_pid is not None: focus_process(target_pid)
     guard_focus()
     send_reveal()
 
@@ -141,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix='island-double-tap-') as temporary:
               user32.SetCursorPos(30,500)
               assert typed()['first']=='prefix '
 
-          for layout_id,char in [('00000409','`'),('00000419','ё')]:
+          for layout_id,char in ([] if SUPPRESSION_ONLY else [('00000409','`'),('00000419','ё')]):
               prepare()
               target=user32.GetForegroundWindow()
               thread=user32.GetWindowThreadProcessId(target,None)
@@ -151,6 +154,7 @@ with tempfile.TemporaryDirectory(prefix='island-double-tap-') as temporary:
               while user32.GetKeyboardLayout(thread)!=layout:
                   assert time.monotonic()<limit,'Keyboard layout did not change'
                   time.sleep(.02)
+              focus_process(receiver.pid)
               press_reveal()
               expect(shell).to_have_attribute('aria-hidden','false')
               assert typed()['first']=='prefix '+char,typed()
@@ -160,6 +164,105 @@ with tempfile.TemporaryDirectory(prefix='island-double-tap-') as temporary:
               assert typed()['first']=='prefix ',typed()
               assert user32.GetForegroundWindow()==target,'Island stole focus'
               passed(f'{layout_id}: a real double tap removes both characters and closes the island without stealing focus')
+
+          def suppress_in_settings(enabled):
+              invoke('reveal_island_shortcut')
+              page.locator('.compact-stage [aria-label="Развернуть список задач"]').evaluate('(e)=>e.click()')
+              expect(page.locator('.dashboard')).to_have_attribute('aria-hidden','false')
+              page.locator('.pin-button').evaluate('(e)=>e.click()')
+              page.get_by_role('button',name='Настройки',exact=True).evaluate('(e)=>e.click()')
+              checkbox=page.get_by_role('checkbox',name='Не печатать Ё / ` при вызове',exact=True)
+              expect(checkbox).to_be_visible()
+              checkbox.set_checked(enabled)
+              limit=time.monotonic()+5
+              while invoke('get_widget_settings')['suppress_shortcut_character']!=enabled:
+                  assert time.monotonic()<limit,'Suppression was not saved'
+                  page.wait_for_timeout(50)
+              assert read(folder/'widget-settings.json')['suppress_shortcut_character']==enabled
+              if enabled: page.screenshot(path=str(OUT/'shortcut-suppression-settings.png'))
+              page.get_by_role('button',name='Закрыть настройки',exact=True).evaluate('(e)=>e.click()')
+
+          suppress_in_settings(True)
+          for layout_id in ['00000409','00000419']:
+              prepare()
+              target=user32.GetForegroundWindow()
+              thread=user32.GetWindowThreadProcessId(target,None)
+              layout=user32.LoadKeyboardLayoutW(layout_id,0)
+              user32.PostMessageW(target,0x50,0,layout)
+              limit=time.monotonic()+2
+              while user32.GetKeyboardLayout(thread)!=layout:
+                  assert time.monotonic()<limit,'Keyboard layout did not change'
+                  time.sleep(.02)
+              focus_process(receiver.pid)
+              press_reveal(receiver.pid)
+              expect(shell).to_have_attribute('aria-hidden','false')
+              assert typed()['first']=='prefix ',typed()
+              press_reveal(receiver.pid)
+              expect(shell).to_have_attribute('aria-hidden','true')
+              assert typed()['first']=='prefix ',typed()
+              focus_process(receiver.pid)
+              guard_focus()
+              user32.keybd_event(0xC0,0x29,0,0)
+              user32.keybd_event(0xC0,0x29,0,0)
+              time.sleep(.05)
+              user32.keybd_event(0xC0,0x29,2,0)
+              expect(shell).to_have_attribute('aria-hidden','false')
+              assert typed()['first']=='prefix ',typed()
+              assert user32.GetForegroundWindow()==target,'Suppressed key stole focus'
+              passed(f'{layout_id}: suppression swallows first/repeated/held keys without deleting existing text; both island toggles still work')
+          suppress_in_settings(False)
+          passed('The Settings checkbox persists both modes and restores the original pass-through behavior immediately')
+
+          if SUPPRESSION_ONLY:
+              prepare();press_reveal(receiver.pid)
+              assert typed()['first']=='prefix ё',typed()
+              settings=invoke('get_widget_settings')
+              settings['suppress_shortcut_character']=True
+              invoke('set_widget_settings',{'settings':settings})
+              page.locator('.compact-stage [aria-label="Развернуть список задач"]').evaluate('(e)=>e.click()')
+              expect(page.locator('.dashboard')).to_have_attribute('aria-hidden','false')
+              page.locator('.pin-button').evaluate('(e)=>e.click()')
+              page.locator('.tabs button').nth(2).evaluate('(e)=>e.click()')
+              page.locator('.add-small').evaluate('(e)=>e.click()')
+              focus_process(app.pid)
+              target=user32.GetForegroundWindow()
+              layout=user32.LoadKeyboardLayoutW('00000419',0)
+              user32.PostMessageW(target,0x50,0,layout)
+              field=page.get_by_label('Название задачи',exact=True)
+              field.fill('local ')
+              page.wait_for_timeout(150)
+              focus_process(app.pid)
+              press_reveal(app.pid);press_reveal(app.pid)
+              expect(field).to_have_value('local ёё')
+              passed('Suppression can be switched off immediately and does not block typing inside the island')
+              page.evaluate("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('exit_app'),50)")
+              app.wait(timeout=10);browser.close()
+              time.sleep(.5)
+              app=subprocess.Popen([str(ROOT/'target/debug/personal-island-desktop.exe')],env=env,stdout=log,stderr=log,creationflags=subprocess.CREATE_NO_WINDOW)
+              children.append(app);allowed_pids.add(app.pid)
+              limit=time.monotonic()+30
+              while True:
+                  assert app.poll() is None,'Restarted app exited'
+                  try:
+                      urllib.request.urlopen('http://127.0.0.1:9222/json/version',timeout=1).close()
+                      break
+                  except OSError:
+                      assert time.monotonic()<limit,'Restarted WebView2 unavailable'
+                      time.sleep(.1)
+              browser=p.chromium.connect_over_cdp('http://127.0.0.1:9222')
+              page=browser.contexts[0].pages[0]
+              page.emulate_media(reduced_motion='reduce')
+              shell=page.locator('.island-shell')
+              expect(shell).to_have_attribute('data-shortcut-ready','true')
+              assert invoke('get_widget_settings')['suppress_shortcut_character']
+              prepare();press_reveal(receiver.pid)
+              expect(shell).to_have_attribute('aria-hidden','false')
+              assert typed()['first']=='prefix ',typed()
+              passed('Restart keeps suppression enabled and the very first real key press does not type a character')
+              page.evaluate("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('exit_app'),50)")
+              app.wait(timeout=10);browser.close()
+              command('stop');receiver.wait(timeout=5)
+              sys.exit(0)
 
           prepare()
           press_reveal()
@@ -261,6 +364,11 @@ with tempfile.TemporaryDirectory(prefix='island-double-tap-') as temporary:
           field=page.get_by_label('Название задачи',exact=True)
           field.fill('local ')
           page.wait_for_timeout(150)
+          # Suppression applies to the global shortcut, not editing inside the island.
+          settings=invoke('get_widget_settings')
+          settings['suppress_shortcut_character']=True
+          invoke('set_widget_settings',{'settings':settings})
+          focus_process(app.pid)
           press_reveal();press_reveal()
           expect(field).to_have_value('local ёё')
           expect(page.locator('.dashboard')).to_have_attribute('aria-hidden','false')
@@ -279,6 +387,33 @@ with tempfile.TemporaryDirectory(prefix='island-double-tap-') as temporary:
           expect(page.locator('.clipboard-card')).to_have_count(1)
           expect(page.locator('.clipboard-card')).to_contain_text('QA copy 1')
           passed('The packaged app renders the dedicated play button and latest-nine clipboard grid with a working Pinned filter')
+          page.evaluate("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('exit_app'),50)")
+          app.wait(timeout=10)
+          browser.close()
+          # Verify that startup actually applies the persisted suppression mode.
+          time.sleep(.5)
+          app=subprocess.Popen([str(ROOT/'target/debug/personal-island-desktop.exe')],env=env,stdout=log,stderr=log,creationflags=subprocess.CREATE_NO_WINDOW)
+          children.append(app)
+          allowed_pids.add(app.pid)
+          limit=time.monotonic()+30
+          while True:
+              assert app.poll() is None,'Restarted app exited'
+              try:
+                  urllib.request.urlopen('http://127.0.0.1:9222/json/version',timeout=1).close()
+                  break
+              except OSError:
+                  assert time.monotonic()<limit,'Restarted WebView2 unavailable'
+                  time.sleep(.1)
+          browser=p.chromium.connect_over_cdp('http://127.0.0.1:9222')
+          page=browser.contexts[0].pages[0]
+          page.emulate_media(reduced_motion='reduce')
+          shell=page.locator('.island-shell')
+          expect(shell).to_have_attribute('data-shortcut-ready','true')
+          assert invoke('get_widget_settings')['suppress_shortcut_character']
+          prepare();press_reveal()
+          expect(shell).to_have_attribute('aria-hidden','false')
+          assert typed()['first']=='prefix ',typed()
+          passed('Restart keeps suppression enabled and the very first real key press does not type a character')
           page.evaluate("setTimeout(()=>window.__TAURI_INTERNALS__.invoke('exit_app'),50)")
           app.wait(timeout=10)
           browser.close()

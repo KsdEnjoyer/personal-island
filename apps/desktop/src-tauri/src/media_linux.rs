@@ -30,6 +30,7 @@ pub struct MediaState {
     can_toggle: bool,
     can_previous: bool,
     can_next: bool,
+    can_seek: bool,
 }
 
 #[derive(Default)]
@@ -51,6 +52,82 @@ fn playerctl(args: &[&str]) -> Result<String, String> {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+const MPRIS_PLAYER: &str = "org.mpris.MediaPlayer2.Player";
+
+fn mpris_call(id: &str, method: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--timeout",
+            "2",
+            "--dest",
+            &format!("org.mpris.MediaPlayer2.{id}"),
+            "--object-path",
+            "/org/mpris/MediaPlayer2",
+            "--method",
+            method,
+        ])
+        .args(args)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn can_seek(id: &str) -> bool {
+    mpris_call(
+        id,
+        "org.freedesktop.DBus.Properties.Get",
+        &[MPRIS_PLAYER, "CanSeek"],
+    )
+    .as_deref()
+        == Ok("(<true>,)")
+}
+
+#[tauri::command]
+pub async fn seek_media(session_id: String, position: f64, title: String) -> Result<(), String> {
+    if !position.is_finite() || position < 0.0 {
+        return Err("Некорректная позиция трека.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if !can_seek(&session_id) {
+            return Err("Перемотка недоступна в этом плеере.".into());
+        }
+        let metadata = playerctl(&[
+            "-p",
+            &session_id,
+            "metadata",
+            "--format",
+            "{{mpris:trackid}}\u{1f}{{mpris:length}}\u{1f}{{xesam:title}}",
+        ])?;
+        let mut fields = metadata.splitn(3, '\u{1f}');
+        let track = fields
+            .next()
+            .filter(|id| id.starts_with('/') && *id != "/org/mpris/MediaPlayer2/TrackList/NoTrack")
+            .ok_or("Плеер не предоставил идентификатор трека.")?;
+        let length = fields
+            .next()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|length| *length > 0)
+            .ok_or("Плеер не предоставил длительность трека.")?;
+        if fields.next().unwrap_or_default() != title {
+            return Err("Трек уже сменился. Попробуй перемотать ещё раз.".into());
+        }
+        let micros = ((position * 1_000_000.0).round() as i64).min(length);
+        mpris_call(
+            &session_id,
+            "org.mpris.MediaPlayer2.Player.SetPosition",
+            &[track, &micros.to_string()],
+        )?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn source_label(id: &str) -> String {
@@ -246,6 +323,7 @@ fn snapshot(preferred: Option<String>) -> Result<MediaState, String> {
         can_toggle: status != "Stopped",
         can_previous: true,
         can_next: true,
+        can_seek: duration > 0.0 && can_seek(id),
     })
 }
 

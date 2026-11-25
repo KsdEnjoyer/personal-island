@@ -37,7 +37,7 @@ x11rb = { version = "0.13.2", features = ["xtest"] }
 tempfile = "3"
 
 [target.'cfg(windows)'.dev-dependencies]
-windows = { version = "0.62", features = ["Media_Playback", "Media_Core", "Storage", "Foundation"] }
+windows = { version = "0.62", features = ["Media_Playback", "Media_Core", "Storage", "Foundation", "Foundation_Collections"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

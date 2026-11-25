@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix='island-notes-qa-') as temp:
                 def invoke(cmd,args=None):return page.evaluate('([cmd,args])=>__TAURI_INTERNALS__.invoke(cmd,args)',[cmd,args or {}])
                 title=page.get_by_label('Название записи');edit=page.get_by_role('textbox',name='Текст заметки')
                 title.fill('Нативная заметка Ё');edit.fill('Не потерять курсив')
-                edit.press('Control+a');page.get_by_role('button',name='Курсив',exact=True).click()
+                edit.press('Control+a');page.get_by_role('toolbar',name='Форматирование выделенного текста',exact=True).get_by_role('button',name='Курсив',exact=True).click()
                 expect(edit.locator('em')).to_have_text('Не потерять курсив')
                 page.get_by_role('button',name='Копировать заметку').click()
                 expect(page.locator('.note-message')).to_have_text('Заметка скопирована')

@@ -1,11 +1,12 @@
 //! Direct X11 shortcut and paste for desktops without keyboard portals.
-use std::sync::atomic::Ordering;
+use crate::preferences::Shortcut;
+use std::sync::{atomic::Ordering, Arc, Mutex};
 use std::time::{Duration, Instant};
 use x11rb::{
     connection::Connection,
     protocol::{
         xproto::{
-            ConnectionExt as _, GrabMode, InputFocus, MapState, ModMask, KEY_PRESS_EVENT,
+            Allow, ConnectionExt as _, GrabMode, InputFocus, MapState, ModMask, KEY_PRESS_EVENT,
             KEY_RELEASE_EVENT,
         },
         xtest::ConnectionExt as _,
@@ -15,7 +16,6 @@ use x11rb::{
     CURRENT_TIME,
 };
 
-const XK_I: u32 = 0x69;
 const XK_V: u32 = 0x76;
 const XK_CONTROL_L: u32 = 0xffe3;
 const XK_NUM_LOCK: u32 = 0xff7f;
@@ -63,57 +63,171 @@ fn num_lock_mask(conn: &RustConnection) -> ModMask {
         .unwrap_or_default()
 }
 
-fn grab_shortcut(conn: &RustConnection, root: u32) -> Result<u8, String> {
-    let i = keycode(conn, XK_I)?;
-    let num_lock = num_lock_mask(conn);
-    let base = ModMask::CONTROL | ModMask::M1;
-    conn.grab_key(false, root, base, i, GrabMode::ASYNC, GrabMode::ASYNC)
-        .map_err(|error| error.to_string())?
-        .check()
-        .map_err(|_| "Сочетание Ctrl+Alt+I уже занято другим приложением".to_string())?;
-    for modifiers in [
-        base | ModMask::LOCK,
-        base | num_lock,
-        base | num_lock | ModMask::LOCK,
-    ] {
-        if modifiers != base {
-            let _ = conn
-                .grab_key(false, root, modifiers, i, GrabMode::ASYNC, GrabMode::ASYNC)
+#[derive(PartialEq, Eq)]
+struct KeyGrab {
+    keycode: u8,
+    masks: Vec<ModMask>,
+}
+
+impl KeyGrab {
+    fn new(conn: &RustConnection, shortcut: &Shortcut) -> Result<Self, String> {
+        let keysym = match shortcut.key {
+            0x41..=0x5a => shortcut.key + 0x20,
+            0x70..=0x87 => shortcut.key - 0x70 + 0xffbe,
+            0xc0 => 0x60,
+            key => key,
+        };
+        let mut base = ModMask::default();
+        if shortcut.ctrl {
+            base |= ModMask::CONTROL;
+        }
+        if shortcut.alt {
+            base |= ModMask::M1;
+        }
+        if shortcut.shift {
+            base |= ModMask::SHIFT;
+        }
+        let num_lock = num_lock_mask(conn);
+        let mut masks = vec![base];
+        for mask in [
+            base | ModMask::LOCK,
+            base | num_lock,
+            base | num_lock | ModMask::LOCK,
+        ] {
+            if !masks.contains(&mask) {
+                masks.push(mask);
+            }
+        }
+        Ok(Self {
+            keycode: keycode(conn, keysym)?,
+            masks,
+        })
+    }
+
+    fn change(
+        &self,
+        conn: &RustConnection,
+        root: u32,
+        previous: Option<&Self>,
+    ) -> Result<(), String> {
+        if previous == Some(self) {
+            return Ok(());
+        }
+        let mut installed = Vec::new();
+        for &mask in &self.masks {
+            if previous.is_some_and(|old| old.keycode == self.keycode && old.masks.contains(&mask))
+            {
+                continue;
+            }
+            let result = conn
+                .grab_key(
+                    false,
+                    root,
+                    mask,
+                    self.keycode,
+                    GrabMode::ASYNC,
+                    GrabMode::SYNC,
+                )
                 .map_err(|error| error.to_string())?
                 .check();
+            if result.is_err() {
+                for installed_mask in installed {
+                    let _ = conn.ungrab_key(self.keycode, root, installed_mask);
+                }
+                let _ = conn.flush();
+                return Err("Сочетание уже занято другим приложением X11.".into());
+            }
+            installed.push(mask);
         }
+        if let Some(old) = previous {
+            for &mask in &old.masks {
+                if old.keycode != self.keycode || !self.masks.contains(&mask) {
+                    conn.ungrab_key(old.keycode, root, mask)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        }
+        conn.flush().map_err(|error| error.to_string())
     }
-    conn.flush().map_err(|error| error.to_string())?;
-    Ok(i)
 }
 
-pub fn start_shortcut(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        if let Err(error) = listen_shortcut(app) {
-            eprintln!("X11 shortcut unavailable: {error}");
-        }
-    });
+struct ShortcutListener {
+    conn: Arc<RustConnection>,
+    root: u32,
+    binding: Option<KeyGrab>,
 }
 
-fn listen_shortcut(app: tauri::AppHandle) -> Result<(), String> {
+static SHORTCUT: Mutex<Option<ShortcutListener>> = Mutex::new(None);
+
+pub fn configure_shortcut(shortcut: &Shortcut) -> Result<(), String> {
+    let mut state = SHORTCUT.lock().map_err(|error| error.to_string())?;
+    let listener = state.as_mut().ok_or("Не удалось подключиться к X11.")?;
+    let binding = KeyGrab::new(&listener.conn, shortcut)?;
+    binding.change(&listener.conn, listener.root, listener.binding.as_ref())?;
+    listener.binding = Some(binding);
+    Ok(())
+}
+
+pub fn start_shortcut(app: tauri::AppHandle) -> Result<(), String> {
     let (conn, screen) = connect()?;
     let root = conn.setup().roots[screen].root;
-    let i = grab_shortcut(&conn, root)?;
+    let conn = Arc::new(conn);
+    *SHORTCUT.lock().map_err(|error| error.to_string())? = Some(ShortcutListener {
+        conn: conn.clone(),
+        root,
+        binding: None,
+    });
+    std::thread::spawn(move || {
+        if let Err(error) = listen_shortcut(app, conn) {
+            eprintln!("X11 shortcut unavailable: {error}");
+        }
+        if let Ok(mut state) = SHORTCUT.lock() {
+            *state = None;
+        }
+    });
+    Ok(())
+}
+
+fn listen_shortcut(app: tauri::AppHandle, conn: Arc<RustConnection>) -> Result<(), String> {
     let mut last_release = None;
     let mut last_activation = Instant::now() - Duration::from_secs(1);
     loop {
         match conn.wait_for_event().map_err(|error| error.to_string())? {
-            Event::KeyPress(event) if event.detail == i => {
-                if last_release == Some(event.time)
+            Event::KeyPress(event) => {
+                let pass_through = crate::keyboard::CAPTURING.load(Ordering::Relaxed)
+                    || crate::keyboard::EDITING.load(Ordering::Relaxed);
+                conn.allow_events(
+                    if pass_through {
+                        Allow::REPLAY_KEYBOARD
+                    } else {
+                        Allow::ASYNC_KEYBOARD
+                    },
+                    event.time,
+                )
+                .map_err(|error| error.to_string())?;
+                conn.flush().map_err(|error| error.to_string())?;
+                let matches = SHORTCUT.lock().ok().is_some_and(|state| {
+                    state
+                        .as_ref()
+                        .and_then(|listener| listener.binding.as_ref())
+                        .is_some_and(|binding| {
+                            binding.keycode == event.detail
+                                && binding
+                                    .masks
+                                    .contains(&ModMask::from(u16::from(event.state) & 0xff))
+                        })
+                });
+                if !matches
+                    || pass_through
+                    || last_release == Some(event.time)
                     || last_activation.elapsed() < Duration::from_millis(200)
-                    || crate::keyboard::EDITING.load(Ordering::Relaxed)
                 {
                     continue;
                 }
                 last_activation = Instant::now();
                 let _ = crate::toggle_island_shortcut(app.clone());
             }
-            Event::KeyRelease(event) if event.detail == i => last_release = Some(event.time),
+            Event::KeyRelease(event) => last_release = Some(event.time),
             _ => {}
         }
     }
@@ -231,7 +345,9 @@ mod tests {
         let (conn, screen) = connect().unwrap();
         let root = conn.setup().roots[screen].root;
         let _window = test_window(&conn, root);
-        let i = grab_shortcut(&conn, root).unwrap();
+        let binding = KeyGrab::new(&conn, &Shortcut::default()).unwrap();
+        binding.change(&conn, root, None).unwrap();
+        let i = binding.keycode;
         let (sender, _) = connect().unwrap();
         let control = keycode(&sender, XK_CONTROL_L).unwrap();
         let alt = keycode(&sender, 0xffe9).unwrap();

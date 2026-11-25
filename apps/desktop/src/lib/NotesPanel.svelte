@@ -6,6 +6,7 @@
   import Highlight from '@tiptap/extension-highlight';
   import TaskList from '@tiptap/extension-task-list';
   import TaskItem from '@tiptap/extension-task-item';
+  import { registerRichEditor } from './rich-editors';
   import { Bold, Italic, Strikethrough, Highlighter, List, ListOrdered, ListChecks, Plus, Check, BellPlus, Copy, Trash2, X, LoaderCircle } from 'lucide-svelte';
   export let refresh: () => Promise<void>;
   type Category = 'notes' | 'ideas' | 'shopping';
@@ -20,6 +21,7 @@
   let document = blank;
   let host:HTMLDivElement;
   let editor:Editor | undefined;
+  let unregisterEditor: (() => void) | undefined;
   let loading = true;
   let loadFailed = false;
   let switching = false;
@@ -157,9 +159,10 @@
     editor = new Editor({element:host,extensions:[StarterKit.configure({link:false,trailingNode:false}),Highlight.configure({multicolor:true}),TaskList,TaskItem.configure({nested:true})],content:JSON.parse(blank),editable:false,
       editorProps:{attributes:{'aria-label':'Текст заметки','role':'textbox','aria-multiline':'true','spellcheck':'true'}},
       onUpdate:({editor:current}) => { document = JSON.stringify(current.getJSON()); changed(); },onTransaction:updateFormat});
+    unregisterEditor = registerRichEditor(editor);
     void readNotes();
   });
-  onDestroy(() => { disposed = true; clearTimeout(saveTimer); void flush(); editor?.destroy(); });
+  onDestroy(() => { disposed = true; clearTimeout(saveTimer); void flush(); unregisterEditor?.(); editor?.destroy(); });
 </script>
 <svelte:window on:keydown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void flush(); } }}/>
 
