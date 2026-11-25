@@ -51,10 +51,11 @@
   .capri-face { position:relative; width:272px; height:104px; isolation:isolate; }
   .capri-open { position:absolute; inset:0; padding:0; border:0; background:transparent; border-radius:28px; }
   .capri-eye,.capri-player,.capri-announcement {z-index:2}
-  .capri-mask { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; user-select:none; filter:drop-shadow(0 6px 5px #0005); }
-  .capri-eye { position:absolute; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:1px; height:31px; padding:1px 2px; border:0; color:#deffed; background:transparent; min-width:0; }
-  .capri-eye:hover { color:#fff; }
-  .capri-eye:focus-visible { outline-color:#27f18b; outline-offset:-3px; border-radius:8px; }
+  .capri-mask { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; user-select:none; filter:drop-shadow(0 6px 5px #0005); transition:filter 140ms; }
+  .capri-face:is(:hover,:focus-within) .capri-mask { filter:brightness(1.16) drop-shadow(0 3px 5px #36ee8d58); }
+  .capri-eye { position:absolute; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:1px; height:31px; padding:1px 2px; border:0; border-radius:8px; color:#deffed; background:transparent; min-width:0; }
+  .capri-eye:is(:hover,:focus-visible) { color:#fff; background:#36ee8d24; }
+  .capri-eye:focus-visible { outline-color:#27f18b; outline-offset:-3px; }
   .capri-clock { top:44px; left:53px; width:77px; }
   .capri-clock strong { font-size:18px; line-height:19px; letter-spacing:-.5px; font-weight:650; font-variant-numeric:tabular-nums; }
   .capri-eye > span { display:flex; align-items:center; justify-content:center; gap:3px; font-size:8px; line-height:9px; color:#8ac6a4; font-variant-numeric:tabular-nums; }

@@ -20,6 +20,7 @@ button:active:not(:disabled) { transform: scale(.98); }
 .island-shell { position: relative; width: 100%; height: 100%; --shape-width: 272px; --shape-height: 56px; transform-origin: 50% 0; }
 .island-shell.concealed { opacity: 0; pointer-events: none; }
 .liquid-surface { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.liquid-surface, .compact-stage { transform-origin: 50% 0; }
 .island-interaction { position: absolute; top: 0; left: 50%; width: 320px; height: 84px; transform: translateX(-50%); }
 .pill {
   position: absolute; top: 0; left: 50%; transform: translateX(-50%);
@@ -42,11 +43,11 @@ button:active:not(:disabled) { transform: scale(.98); }
 .pill-weather.stale { color: #666; }
 .pill-task-total { font-size: 9px; line-height: 1; color: #737373; font-weight: 400; }
 .dashboard {
-  position: absolute; top: 0; left: 50%; width: var(--panel-width,704px); height: var(--panel-height,458px);
+  position: absolute; top: 0; left: 50%; width: var(--panel-width); height: var(--panel-height);
   transform: translateX(-50%) translateY(-7px); display: flex; flex-direction: column;
   padding: 17px 16px 8px; opacity: 0; filter: blur(5px); pointer-events: none;
   transition: opacity 130ms, filter 150ms, transform 180ms var(--ease);
-  clip-path: inset(0 max(0px,calc((var(--panel-width,704px) - var(--shape-width))/2)) max(0px,calc(var(--panel-height,458px) - var(--shape-height))) round 0 0 28px 28px);
+  clip-path: inset(0 max(0px,calc((var(--panel-width) - var(--shape-width))/2)) max(0px,calc(var(--panel-height) - var(--shape-height))) round 0 0 28px 28px);
 }
 .dashboard.visible { opacity: 1; filter: none; transform: translateX(-50%) translateY(0); pointer-events: auto; transition: opacity 300ms 80ms var(--ease), filter 300ms 70ms var(--ease), transform 380ms 60ms var(--ease); }
 .view-stage { flex:1; min-height:0; display:flex; flex-direction:column; }

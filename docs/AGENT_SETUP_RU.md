@@ -9,7 +9,7 @@
 
 | Режим | Где работают компоненты | Что нужно пользователю |
 | --- | --- | --- |
-| Только островок | Компьютер пользователя, локальная SQLite | Windows 10/11 и зависимости сборки |
+| Только островок | Компьютер пользователя, локальная SQLite | Windows 10/11 или Linux и зависимости сборки |
 | Личный агент через stdio MCP | Тот же компьютер и та же база задач | Совместимый AI-клиент, запускающий локальный процесс |
 | Веб-ChatGPT через HTTPS/OAuth | Компьютер пользователя и его собственный VPS | Свой VPS, домен, TLS, секреты и поддержка MCP в клиенте |
 
@@ -22,12 +22,13 @@
 
 1. Прочитай [AGENTS.md](../AGENTS.md), [README](../README.md) и
    [SECURITY.md](../SECURITY.md). Работай в каталоге клонированного репозитория.
-2. Проверь Windows 10/11, Git, Node.js 24 LTS с npm, Rust stable MSVC,
-   Visual Studio C++ Build Tools с Windows SDK и WebView2 Runtime.
+2. Проверь Git, Node.js с npm и Rust stable. На Windows нужны MSVC,
+   Visual Studio C++ Build Tools с Windows SDK и WebView2 Runtime; на Linux —
+   GTK 3 и WebKitGTK 4.1 с заголовками и системные утилиты для нужных функций.
    Актуальные системные требования сверяй с
    [официальной документацией Tauri](https://v2.tauri.app/start/prerequisites/).
-   Desktop поддерживается на Windows; отдельный stdio MCP также собирается
-   на Linux/macOS.
+   Desktop поддерживается на Windows и Linux; отдельный stdio MCP также
+   собирается на macOS.
 3. Учитывай уже выданное пользователем разрешение на установку и настройку.
    Если действительно не хватает доступа или выбора AI-клиента, уточни именно
    это. Не запрашивай пароли и токены в чате, не печатай их в отчётах или логах.
@@ -36,7 +37,7 @@
 
 ## 2. Сборка приложения
 
-В PowerShell из корня репозитория:
+На Windows в PowerShell из корня репозитория:
 
 ```powershell
 npm.cmd --prefix apps/desktop ci
@@ -52,6 +53,22 @@ npm.cmd --prefix apps/desktop run tauri -- build
 При необходимости создай ярлык через `scripts/create-desktop-shortcut.ps1`.
 Не публикуй снимки экрана с личными задачами и содержимым буфера.
 
+На Linux из корня репозитория:
+
+```sh
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run check
+npm --prefix apps/desktop run build
+cargo test --locked -p task-core
+cargo check --locked -p task-mcp
+npm --prefix apps/desktop run tauri -- build
+```
+
+Пакеты будут в `target/release/bundle/`. Чтобы добавить собранное приложение
+в меню, выполни `./scripts/create-desktop-shortcut.sh` из корня репозитория.
+Системные разрешения для горячей клавиши и вставки, а также запуск AppImage
+описаны в [README](../README.md#запуск-на-linux).
+
 ## 3. Локальный MCP — основной способ подключения
 
 Следуй [LOCAL_MCP_RU.md](LOCAL_MCP_RU.md):
@@ -60,14 +77,16 @@ npm.cmd --prefix apps/desktop run tauri -- build
 cargo build --locked --release -p task-mcp
 ```
 
-Зарегистрируй абсолютный путь к `target/release/task-mcp.exe` в выбранном
-клиенте. Клиент сам запускает stdio-процесс; сетевой порт и OpenAI API-ключ
+Зарегистрируй в выбранном клиенте абсолютный путь к
+`target/release/task-mcp.exe` на Windows или `target/release/task-mcp` на Linux.
+Клиент сам запускает stdio-процесс; сетевой порт и OpenAI API-ключ
 для этого не требуются. Настраивай существующий конфиг клиента аккуратно,
 сохраняя другие MCP-подключения и настройки. Формат зависит от клиента:
 JSON-пример нельзя целиком вставлять в TOML.
 
 Desktop и MCP должны использовать одну базу задач. По умолчанию это
-`%LOCALAPPDATA%\PersonalIsland\tasks.sqlite3`. Если пользователь выбирает
+`%LOCALAPPDATA%\PersonalIsland\tasks.sqlite3` на Windows или
+`$XDG_DATA_HOME/PersonalIsland/tasks.sqlite3` на Linux. Если пользователь выбирает
 другое расположение через `PERSONAL_ISLAND_DB`, задай одинаковый абсолютный
 путь обоим процессам. Перезапусти процессы после изменения окружения.
 Настрой `PERSONAL_ISLAND_TIMEZONE` для MCP под часовой пояс пользователя.
@@ -78,7 +97,8 @@ Desktop и MCP должны использовать одну базу зада�
 
 ## 4. Проверка без изменения личного расписания
 
-1. Проверь запуск приложения и показ/скрытие островка клавишей Ё / `.
+1. Проверь запуск приложения. На Windows проверь показ/скрытие клавишей Ё / `,
+   на Linux — системным сочетанием (предложено Ctrl+Alt+I) или повторным запуском.
 2. Через подключённый MCP вызови `get_current_time`, затем `list_tasks`.
    Сверь время, часовой пояс и доступ к нужной базе. В отчёт достаточно
    результата проверки; не копируй туда всё личное расписание.

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Personal Island
+Exec=/usr/bin/personal-island-desktop
+Icon=personal-island-desktop
+NoDisplay=true

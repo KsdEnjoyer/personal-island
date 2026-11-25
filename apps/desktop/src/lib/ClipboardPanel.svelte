@@ -5,6 +5,7 @@
   import { Clipboard, Search, Pin, Trash2, Pause, Play, ArrowUpLeft, Type, Image as ImageIcon, File, Files } from 'lucide-svelte';
   import type { ClipboardEntry, ClipboardHistory } from '../types';
   export let paste: (id: number) => Promise<void>;
+  export let automaticPaste = true;
   let entries: ClipboardEntry[] = [];
   let search = '';
   let pinnedOnly = false;
@@ -57,12 +58,12 @@
     {#each entries as entry (entry.id)}
       <article class="clipboard-card" class:pinned={entry.pinned}>
         <div class="clip-meta"><span>{#if entry.kind === 'image'}<ImageIcon size={12}/> Картинка{:else if entry.kind === 'files'}<Files size={12}/> {entry.files?.length === 1 ? 'Файл' : `Файлы · ${entry.files?.length || 0}`}{:else}<Type size={12}/> Текст{/if}</span><div><button class="clip-pin" aria-label={entry.pinned ? 'Открепить запись' : 'Закрепить запись'} aria-pressed={entry.pinned} disabled={busy} on:click={() => action(() => invoke('pin_clipboard', { id: entry.id, pinned: !entry.pinned }))}><Pin size={13}/></button><button aria-label="Удалить запись" disabled={busy} on:click={() => deleted = entry.id}><Trash2 size={13}/></button></div></div>
-        <button class="clip-content" class:clip-files={entry.kind === 'files'} aria-label={entry.kind === 'image' ? `Вставить картинку ${entry.width} на ${entry.height}` : entry.kind === 'files' ? `Вставить файлы: ${entry.files?.map(file=>file.name).join(', ')}` : `Вставить текст: ${entry.text?.slice(0, 80)}`} disabled={busy} on:click={() => action(() => paste(entry.id))}>
+        <button class="clip-content" class:clip-files={entry.kind === 'files'} aria-label={`${automaticPaste ? 'Вставить' : 'Скопировать'}: ${entry.kind === 'image' ? `картинка ${entry.width} на ${entry.height}` : entry.kind === 'files' ? entry.files?.map(file=>file.name).join(', ') : entry.text?.slice(0, 80)}`} disabled={busy} on:click={() => action(() => paste(entry.id))}>
           {#if entry.kind === 'files'}
             {#if entry.thumbnail}<img src={entry.thumbnail} alt="Превью скопированного фото"/>{:else}<span class="file-symbol"><File size={26}/><small>{entry.files?.[0]?.name.split('.').pop()?.toUpperCase()}</small></span>{/if}
             <span class="file-names" title={`Для вставки исходные файлы должны оставаться на месте.\n${entry.files?.map(file=>file.path).join('\n')}`}>{entry.files?.map(file=>file.name).join(', ')}</span>
           {:else if entry.kind === 'image' && entry.thumbnail}<img src={entry.thumbnail} alt={`Скопированная картинка, ${entry.width} × ${entry.height}`}/>{:else}<span class="clip-text">{entry.text}</span>{/if}
-          <span class="clip-bottom"><small>{entry.kind === 'image' ? `${entry.width} × ${entry.height}` : entry.kind === 'files' ? 'Файлы на диске' : new Date(entry.captured_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small><span>Вставить <ArrowUpLeft size={12}/></span></span>
+          <span class="clip-bottom"><small>{entry.kind === 'image' ? `${entry.width} × ${entry.height}` : entry.kind === 'files' ? 'Файлы на диске' : new Date(entry.captured_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</small><span>{automaticPaste ? 'Вставить' : 'Скопировать'} <ArrowUpLeft size={12}/></span></span>
         </button>
         {#if deleted === entry.id}<div class="clip-delete"><span>Удалить запись?</span><button on:click={() => deleted = null}>Отмена</button><button disabled={busy} on:click={() => action(async () => { await invoke('delete_clipboard', { id: entry.id }); deleted = null; })}>Удалить</button></div>{/if}
       </article>
@@ -70,7 +71,7 @@
       <div class="clipboard-empty"><Clipboard size={27} strokeWidth={1.2}/><b>{search ? 'Ничего не нашлось' : loading ? 'Загружаю историю…' : pinnedOnly ? 'Нет закреплённых записей' : enabled ? 'Скопируй что-нибудь' : 'История на паузе'}</b><span>{search ? 'Попробуй другое слово' : pinnedOnly ? 'Нажми на булавку у нужной записи' : 'Текст, картинки и файлы появятся после копирования'}</span></div>
     {/each}
   </div>
-  <div class="clipboard-foot"><span><ArrowUpLeft size={12}/> Клик — вставить в предыдущее окно</span><span><Pin size={11}/> Закреплённое остаётся в истории</span></div>
+  <div class="clipboard-foot"><span><ArrowUpLeft size={12}/> {automaticPaste ? 'Клик — вставить в предыдущее окно' : 'Клик — скопировать; затем Ctrl+V в нужном окне'}</span><span><Pin size={11}/> Закреплённое остаётся в истории</span></div>
 </section>
 <style>
   .clipboard-panel {padding:14px}

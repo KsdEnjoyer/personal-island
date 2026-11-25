@@ -1,0 +1,7 @@
+{
+  "uuid": "personal-island@personalisland.dev",
+  "name": "Personal Island",
+  "description": "Hosts the Personal Island surface in the GNOME date slot.",
+  "shell-version": ["50"],
+  "version": 3
+}

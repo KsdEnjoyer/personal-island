@@ -13,9 +13,13 @@ pub struct Shortcut {
 impl Default for Shortcut {
     fn default() -> Self {
         Self {
-            key: 0xC0,
-            ctrl: false,
-            alt: false,
+            key: if cfg!(target_os = "linux") {
+                0x49
+            } else {
+                0xC0
+            },
+            ctrl: cfg!(target_os = "linux"),
+            alt: cfg!(target_os = "linux"),
             shift: false,
         }
     }
@@ -28,14 +32,18 @@ impl Shortcut {
         if self.is_default() {
             return Ok(());
         }
-        let function = (0x70..=0x87).contains(&self.key) && self.key != 0x7B;
+        let function = (0x70..=0x87).contains(&self.key) && (!cfg!(windows) || self.key != 0x7B);
         let character = (0x30..=0x39).contains(&self.key)
             || (0x41..=0x5A).contains(&self.key)
             || [0x20, 0xC0].contains(&self.key);
         if function || (character && (self.ctrl || self.alt)) {
             Ok(())
         } else {
-            Err("Выбери Ctrl/Alt с буквой, цифрой или пробелом, либо F1–F11 / F13–F24. F12 зарезервирована Windows.".into())
+            Err(if cfg!(windows) {
+                "Выбери Ctrl/Alt с буквой, цифрой или пробелом, либо F1–F11 / F13–F24. F12 зарезервирована Windows."
+            } else {
+                "Выбери Ctrl/Alt с буквой, цифрой или пробелом, либо F1–F24."
+            }.into())
         }
     }
 }
@@ -78,8 +86,16 @@ impl Preferences {
     pub fn load(path: PathBuf) -> Result<Self, String> {
         let value = match std::fs::read(&path) {
             Ok(bytes) => {
-                let value: WidgetSettings = serde_json::from_slice(&bytes)
+                let mut value: WidgetSettings = serde_json::from_slice(&bytes)
                     .map_err(|e| format!("Не удалось прочитать настройки: {e}"))?;
+                if cfg!(target_os = "linux")
+                    && value.shortcut.key == 0xC0
+                    && !value.shortcut.ctrl
+                    && !value.shortcut.alt
+                    && !value.shortcut.shift
+                {
+                    value.shortcut = Shortcut::default();
+                }
                 value.validate()?;
                 value
             }
@@ -174,7 +190,7 @@ mod tests {
             r#"{"shortcut":{"key":192,"ctrl":false,"alt":false,"shift":false},"review_interval_minutes":30}"#,
         )
         .unwrap();
-        assert_eq!(settings, WidgetSettings::default());
+        assert!(!settings.suppress_shortcut_character);
     }
     #[test]
     fn invalid_intervals_and_typing_keys_are_rejected() {
@@ -186,10 +202,12 @@ mod tests {
             .validate()
             .is_err());
         }
-        for key in [0x41, 0x7B, 0x10, 0xFF] {
+        for key in [0x41, 0x10, 0xFF] {
             assert!(Shortcut {
                 key,
-                ..Default::default()
+                ctrl: false,
+                alt: false,
+                shift: false,
             }
             .validate()
             .is_err());

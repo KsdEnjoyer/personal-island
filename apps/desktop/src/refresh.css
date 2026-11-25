@@ -22,7 +22,7 @@
 .reminders { min-height:0; overflow:auto; scrollbar-width:thin; flex:1; }
 .notes-workspace { grid-template-columns:minmax(0,1fr) 192px; }
 .notes-loading { background:#101010; border-radius:17px; padding:20px; color:#888; font-size:12px; }
-.compact-stage { position:absolute; top:0; left:50%; width:272px; height:56px; transform:translateX(-50%); transition:opacity 140ms,filter 160ms; }
+.compact-stage { position:absolute; top:0; left:50%; width:272px; height:56px; translate:-50% 0; transition:opacity 140ms,filter 160ms; }
 .compact-stage.wide { width:432px; height:148px; }
 .compact-stage.invisible { opacity:0; filter:blur(5px); pointer-events:none; }
 .compact-stage { transition:opacity 240ms var(--ease),filter 260ms var(--ease); }
@@ -32,7 +32,24 @@
 @media (prefers-reduced-motion:reduce) { .liquid-surface {transition:none} }
 .task-item.reminder-highlight { background:#ffb22414; box-shadow:inset 2px 0 #d6b573; transition:background 350ms var(--ease),box-shadow 350ms var(--ease); }
 .pill { grid-template-columns:82px minmax(0,1fr) 48px; padding:0 18px; gap:12px; text-align:left; }
+.compact-stage .pill { border-radius:0 0 18px 18px; transition:background-color 140ms, box-shadow 140ms, transform 180ms var(--ease); }
+.compact-stage .pill:is(:hover,:focus-within) { background-color:#ffffff12; box-shadow:inset 0 0 0 1px #ffffff30; }
 .pill-clock { font-size:21px; font-weight:620; letter-spacing:-.5px; font-variant-numeric:tabular-nums; }
+.compact-stage .pill:is(:hover,:focus-within) .pill-clock { color:#ffe0a3; }
+.focus-timer-alert {
+  display:flex; align-items:center; justify-content:center; gap:12px;
+  padding:6px 16px; border:1px solid #bd8e4e; background:#2d2113; color:#ffd99a;
+  text-align:left;
+}
+.focus-timer-alert > span { display:grid; gap:1px; }
+.focus-timer-alert strong { font-size:17px; font-weight:650; line-height:1.15; color:#fff0d4; }
+.focus-timer-alert small { font-size:12px; line-height:1.2; }
+.focus-timer-compact { width:100%; height:100%; border-radius:0 0 18px 18px; }
+.focus-timer-compact:hover { background:#412d17; }
+.focus-timer-banner {
+  position:absolute; z-index:10; left:50%; bottom:34px; transform:translateX(-50%);
+  min-height:56px; border-radius:12px; box-shadow:0 5px 22px #0008; pointer-events:none;
+}
 .pill-clock > small { display:flex; align-items:center; gap:4px; color:#8b8b8b; font-size:10px; letter-spacing:0; font-weight:400; margin-top:1px; }
 .pill-clock > small.running { color:#ffc36a; }
 .pill-summary { display:flex; flex-direction:column; gap:2px; }

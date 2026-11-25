@@ -1,12 +1,14 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onDestroy } from 'svelte';
-  import { capturedShortcut, defaultShortcut, shortcutLabel } from './widget-settings';
+  import { capturedShortcut, defaultShortcut, linuxDefaultShortcut, shortcutLabel, type ShortcutMode } from './widget-settings';
   import type { WidgetSettings } from '../types';
   export let settings: WidgetSettings;
   export let save: (value: WidgetSettings) => Promise<boolean>;
   export let busy = false;
   export let error = '';
+  export let shortcutMode: ShortcutMode = 'windows';
+  export let systemShortcut: string | null = null;
   let capturing = false;
   let captureError = '';
   let customMinutes: number | undefined = settings.review_interval_minutes || 30;
@@ -21,12 +23,20 @@
     try { await invoke('set_shortcut_capture', { capturing: active }); }
     catch (err) { capturing = false; captureError = String(err); }
   }
+  async function configurePortal() {
+    captureError = '';
+    try { await invoke('configure_portal_shortcuts'); }
+    catch (err) { captureError = String(err); }
+  }
   async function keydown(event: KeyboardEvent) {
     event.preventDefault(); event.stopPropagation();
     if (event.key === 'Escape') { const input = event.currentTarget as HTMLInputElement; await capture(false); input.blur(); return; }
     if (event.repeat || ['Control','Alt','Shift','Meta'].includes(event.key)) return;
-    const shortcut = capturedShortcut(event);
-    if (!shortcut) { captureError = 'Ctrl/Alt + буква, цифра, пробел или F1–F11 / F13–F24'; return; }
+    const shortcut = capturedShortcut(event, shortcutMode === 'windows');
+    if (!shortcut) {
+      captureError = shortcutMode === 'windows' ? 'Ctrl/Alt + буква, цифра, пробел или F1–F11 / F13–F24' : 'Ctrl/Alt + буква, цифра, пробел или F1–F24';
+      return;
+    }
     captureError = '';
     if (await save({ ...settings, shortcut })) await capture(false);
   }
@@ -44,12 +54,21 @@
 </script>
 
 <section class="widget-preferences" aria-label="Клавиши и автопоказ">
-  <div class="preference-heading"><span>Показать / скрыть</span><button disabled={busy} on:click={() => save({...settings, shortcut: {...defaultShortcut}})}>Сбросить</button></div>
+  {#if shortcutMode === 'portal'}
+    <div class="preference-heading"><span>Показать / скрыть{systemShortcut ? ` · ${systemShortcut}` : ''}</span><button disabled={busy} on:click={configurePortal}>Настроить в системе</button></div>
+    {#if !systemShortcut}
+      <p class="preference-note">Системное сочетание не назначено. Открой Personal Island из меню приложений или назначь его запуск в настройках клавиатуры.</p>
+    {/if}
+  {:else}
+  <div class="preference-heading"><span>Показать / скрыть</span><button disabled={busy} on:click={() => save({...settings, shortcut: {...(shortcutMode === 'windows' ? defaultShortcut : linuxDefaultShortcut)}})}>Сбросить</button></div>
   <input class="shortcut-recorder" readonly aria-label="Сочетание для показа островка" aria-busy={busy} value={capturing ? 'Нажми новое сочетание…' : shortcutLabel(settings.shortcut)} disabled={busy}
     on:focus={() => capture(true)} on:click={() => { captureError = ''; void capture(true); }} on:blur={() => capture(false)} on:keydown={keydown}/>
   <p class="preference-note">Нажми на поле и задай сочетание. Escape — отмена.</p>
+  {/if}
+  {#if shortcutMode === 'windows'}
   <label class="character-row"><span>Не печатать Ё / ` при вызове</span><input type="checkbox" checked={settings.suppress_shortcut_character} disabled={busy || !defaultKey} on:change={suppression}/></label>
   <p class="preference-note">{#if !defaultKey}Для клавиши Ё / `. Выбранное сочетание уже не печатает символ.{:else if settings.suppress_shortcut_character}Клавиша только показывает и скрывает островок. В его текстовых полях Ё вводится как обычно.{:else}Одиночное Ё печатает символ. Двойное за 1,5 с убирает его из ввода.{/if}</p>
+  {/if}
   <label class="interval-row"><span>Автопоказ дел</span><select aria-label="Интервал автопоказа" disabled={busy} value={selectingCustom ? -1 : settings.review_interval_minutes} on:change={event => interval(Number(event.currentTarget.value))}><option value={0}>Выключен</option><option value={15}>15 минут</option><option value={30}>30 минут</option><option value={60}>1 час</option><option value={120}>2 часа</option><option value={-1}>Свой интервал…</option></select></label>
   {#if selectingCustom}<form class="custom-interval" on:submit|preventDefault={applyCustom}><input type="number" aria-label="Свой интервал автопоказа, минуты" min="5" max="1440" step="1" bind:value={customMinutes} disabled={busy}/><span>мин</span><button type="submit" disabled={busy}>Применить</button></form>{/if}
   <p class="preference-note">По часам: 30 минут — в :00 и :30. Свой интервал отсчитывается от полуночи. Обычные напоминания о задачах работают отдельно.</p>

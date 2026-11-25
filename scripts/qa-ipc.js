@@ -15,10 +15,13 @@
   window.qaClipboard = [];
   window.qaNotes = [];
   window.qaClipboardEnabled = true;
-  window.qaMedia = { sessions: [], session_id: null, source: '', title: '', artist: '', artwork: null, playing: false, position: 0, duration: 0, can_toggle: false, can_previous: false, can_next: false };
+  window.qaMedia = { sessions: [], session_id: null, source: '', title: '', artist: '', artwork: null, playing: false, position: 0, duration: 0, can_toggle: false, can_previous: false, can_next: false, can_seek: false };
+  window.qaCapabilities = { automaticPaste: true };
+  window.qaWidgetSettings = { shortcut: { key: 192, ctrl: false, alt: false, shift: false }, suppress_shortcut_character: false, review_interval_minutes: 30 };
   window.qaWeather = { data: null, stale: false, error: null };
   let callbackId = 0;
   let generation = 0;
+  let focusAlarm;
   const callbacks = new Map();
   const listeners = new Map();
   window.qaEmit = (event, payload) => { const handler = listeners.get(event); if(handler) callbacks.get(handler)({event,id:handler,payload}); };
@@ -37,6 +40,19 @@
     if (['register_island_shortcut','set_island_shortcut_editing','hide_island','set_island_appearance'].includes(cmd)) return;
     if (cmd === 'toggle_island_shortcut') { window.qaEmit('island-toggle', null); return; }
     if (cmd === 'reveal_island_shortcut') { window.qaReveal('manual'); return; }
+    if (cmd === 'get_platform_capabilities') return structuredClone(window.qaCapabilities);
+    if (cmd === 'get_widget_settings') return structuredClone(window.qaWidgetSettings);
+    if (cmd === 'set_widget_settings') { window.qaWidgetSettings = structuredClone(args.settings); return structuredClone(window.qaWidgetSettings); }
+    if (cmd === 'set_shortcut_capture' || cmd === 'configure_portal_shortcuts') return;
+    if (cmd === 'set_focus_timer_deadline') {
+      clearTimeout(focusAlarm);
+      const {deadline} = args;
+      if (deadline !== null) focusAlarm = setTimeout(() => {
+        if (document.querySelector('.dashboard')?.getAttribute('aria-hidden') !== 'false') window.qaReveal('focus');
+        window.qaEmit('focus-timer-finished', deadline);
+      }, Math.max(0, deadline - Date.now()));
+      return;
+    }
     if (cmd === 'show_reminder_island') {
       return {generation:++generation,expanded:document.querySelector('.dashboard')?.getAttribute('aria-hidden')==='false'};
     }
@@ -54,7 +70,7 @@
     if (cmd === 'get_media_state') return structuredClone(window.qaMedia);
     if (cmd === 'start_yandex_music') {
       if (window.qaLaunchDelay) await new Promise(resolve=>setTimeout(resolve,window.qaLaunchDelay));
-      window.qaMedia = {sessions:[{id:'ru.yandex.desktop.music',label:'Яндекс Музыка'}],session_id:'ru.yandex.desktop.music',source:'Яндекс Музыка',title:'QA resumed track',artist:'QA Artist',artwork:null,playing:true,position:0,duration:200,can_toggle:true,can_previous:true,can_next:true};
+      window.qaMedia = {sessions:[{id:'ru.yandex.desktop.music',label:'Яндекс Музыка'}],session_id:'ru.yandex.desktop.music',source:'Яндекс Музыка',title:'QA resumed track',artist:'QA Artist',artwork:null,playing:true,position:0,duration:200,can_toggle:true,can_previous:true,can_next:true,can_seek:true};
       return structuredClone(window.qaMedia);
     }
     if (cmd === 'get_widget_summary') return {notes:qaNotes.filter(n=>n.category==='notes').length,ideas:qaNotes.filter(n=>n.category==='ideas').length,shopping:qaNotes.filter(n=>n.category==='shopping').length,clipboard:Math.min(9,qaClipboard.length),pinned:qaClipboard.filter(e=>e.pinned).length,capturing:qaClipboardEnabled};
@@ -69,6 +85,7 @@
     }
     if (cmd === 'open_weather_source') return;
     if (cmd === 'media_command') { if(args.action === 'toggle') window.qaMedia.playing = !window.qaMedia.playing; return; }
+    if (cmd === 'seek_media') { window.qaMedia.position = args.position; return; }
     if (cmd === 'open_yandex_music' || cmd === 'copy_clipboard_entry' || cmd === 'paste_to_previous_window') return;
     if (cmd === 'list_clipboard') {
       let entries=[...qaClipboard].sort((a,b)=>b.captured_at-a.captured_at || b.id-a.id);

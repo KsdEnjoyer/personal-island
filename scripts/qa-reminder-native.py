@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix='island-reminder-native-') as temp:
           current = create('Не потерять черновик')
           banner = page.locator('.dashboard .reminder-notice')
           expect(banner.locator('strong')).to_have_text(current['title'], timeout=10000)
-          assert page.evaluate('innerWidth') == 760
+          assert page.evaluate('innerWidth === Math.min(960, screen.availWidth)')
           expect(field).to_have_value('Несохранённый черновик')
           assert page.evaluate('document.activeElement?.getAttribute("aria-label")') == 'Название задачи'
           await_sent(current['id'])

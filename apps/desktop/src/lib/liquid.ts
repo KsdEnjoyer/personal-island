@@ -8,7 +8,7 @@ type Options = {
 
 export const ISLAND = {
   collapsed: { width: 272, height: 56 },
-  expanded: { width: 704, height: 458 },
+  expanded: { width: 904, height: 578 },
 };
 
 /** A single persistent silhouette: the native window only shrinks after it settles. */
@@ -73,7 +73,7 @@ export function createLiquidIsland(canvas: HTMLCanvasElement, options: Options) 
     const w = width.value;
     const h = height.value;
     const x = (viewportWidth - w) / 2;
-    const progress = Math.max(0, Math.min(1, (w - 272) / (704 - 272)));
+    const progress = Math.max(0, Math.min(1, (w - ISLAND.collapsed.width) / Math.max(1, expandedSize.width - ISLAND.collapsed.width)));
     const radius = 20 + 8 * progress;
     const shoulder = 24;
     const wave: [number, number][] = [];

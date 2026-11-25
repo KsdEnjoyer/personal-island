@@ -1,0 +1,21 @@
+.personal-island-slot,
+.personal-island-slot:hover,
+.personal-island-slot:active,
+.personal-island-slot:focus {
+    -natural-hpadding: 0;
+    -minimum-hpadding: 0;
+    padding: 0;
+    background-color: transparent;
+    box-shadow: none;
+}
+
+.personal-island-highlight {
+    border: 1px solid transparent;
+    border-radius: 12px;
+}
+
+.personal-island-face:hover .personal-island-highlight,
+.personal-island-face:focus .personal-island-highlight {
+    background-color: rgba(255, 255, 255, 0.13);
+    border-color: rgba(255, 255, 255, 0.3);
+}

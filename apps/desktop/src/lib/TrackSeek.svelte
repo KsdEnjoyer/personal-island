@@ -37,7 +37,7 @@
 <div class="track-seek" class:compact data-seek-status={status}>
   <input class="seek-input" type="range" aria-label="Перемотать трек" min="0" max={Math.max(1, media.duration)} step="0.1" bind:value={draft}
     aria-valuetext={`${time(position)} из ${time(media.duration)}`} disabled={!available || seeking}
-    title={available ? 'Перемотать трек' : 'Плеер не предоставил перемотку через Windows'}
+    title={available ? 'Перемотать трек' : 'Перемотка недоступна в этом плеере'}
     style={`--seek:${media.duration > 0 ? position / media.duration * 100 : 0}%`}
     on:pointerdown={() => { gesture = trackKey(); error = ''; }} on:input={preview} on:change={commit}
     on:blur={() => { if (pending) void commit(); }}/>
