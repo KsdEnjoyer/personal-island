@@ -26,7 +26,7 @@ jobs:
       - run: cargo test --locked -p personal-island-desktop --lib
       - run: npm.cmd --prefix apps/desktop run tauri -- build --debug --no-bundle
   linux-desktop:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -42,9 +42,46 @@ jobs:
       - run: npm --prefix apps/desktop run check
       - run: npm --prefix apps/desktop run build
       - run: cargo test --locked -p personal-island-desktop --lib
-      - run: xvfb-run -a cargo test --locked -p personal-island-desktop --lib x11_linux::tests:: -- --ignored --test-threads=1
+      - run: xvfb-run -a cargo test --locked -p personal-island-desktop --lib x11_linux::tests -- --ignored --test-threads=1
       - run: cargo clippy --locked -p personal-island-desktop --all-targets -- -D warnings
-      - run: npm --prefix apps/desktop run tauri -- build --debug --bundles deb
+  linux-packages:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    timeout-minutes: 45
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - name: Install Ubuntu 22.04 build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl file git \
+            build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libfuse2 patchelf desktop-file-utils rpm
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/desktop run tauri -- build -- --locked
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: personal-island-linux-x86_64
+          if-no-files-found: error
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
   portable-mcp-and-gateway:
     runs-on: ubuntu-latest
     timeout-minutes: 25

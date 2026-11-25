@@ -123,7 +123,7 @@ with tempfile.TemporaryDirectory(prefix='island-capri-native-') as temporary:
 
           face.locator('.capri-summary').evaluate('(e)=>e.click()')
           expect(page.locator('.dashboard')).to_have_attribute('aria-hidden', 'false')
-          assert page.evaluate('innerWidth') == 760
+          assert page.evaluate('innerWidth === Math.min(960, screen.availWidth)')
           expect(page.locator('.dashboard')).to_have_css('background-color','rgb(8, 15, 13)')
           page.screenshot(path=str(OUT / 'capri-native-expanded.png'))
           page.locator('.pin-button').evaluate('(e)=>{if(e.getAttribute("aria-pressed")!=="true")e.click()}')

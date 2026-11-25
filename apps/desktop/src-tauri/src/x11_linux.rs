@@ -21,7 +21,8 @@ const XK_CONTROL_L: u32 = 0xffe3;
 const XK_NUM_LOCK: u32 = 0xff7f;
 
 pub fn native_session() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some()
+    let has_display = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    has_display("DISPLAY") && !has_display("WAYLAND_DISPLAY") && !has_display("WAYLAND_SOCKET")
 }
 
 fn connect() -> Result<(RustConnection, usize), String> {
@@ -152,6 +153,7 @@ impl KeyGrab {
 }
 
 struct ShortcutListener {
+    app: tauri::AppHandle,
     conn: Arc<RustConnection>,
     root: u32,
     binding: Option<KeyGrab>,
@@ -165,7 +167,29 @@ pub fn configure_shortcut(shortcut: &Shortcut) -> Result<(), String> {
     let binding = KeyGrab::new(&listener.conn, shortcut)?;
     binding.change(&listener.conn, listener.root, listener.binding.as_ref())?;
     listener.binding = Some(binding);
+    let app = listener.app.clone();
+    drop(state);
+    crate::keyboard::set_shortcut_label(&app, Some(shortcut_label(shortcut)));
     Ok(())
+}
+
+fn shortcut_label(shortcut: &Shortcut) -> String {
+    let key = match shortcut.key {
+        0x70..=0x87 => format!("F{}", shortcut.key - 0x6f),
+        0xc0 => "`".into(),
+        0x20 => "Пробел".into(),
+        key => char::from_u32(key).unwrap_or('?').to_string(),
+    };
+    [
+        shortcut.ctrl.then_some("Ctrl"),
+        shortcut.alt.then_some("Alt"),
+        shortcut.shift.then_some("Shift"),
+        Some(key.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("+")
 }
 
 pub fn start_shortcut(app: tauri::AppHandle) -> Result<(), String> {
@@ -173,17 +197,19 @@ pub fn start_shortcut(app: tauri::AppHandle) -> Result<(), String> {
     let root = conn.setup().roots[screen].root;
     let conn = Arc::new(conn);
     *SHORTCUT.lock().map_err(|error| error.to_string())? = Some(ShortcutListener {
+        app: app.clone(),
         conn: conn.clone(),
         root,
         binding: None,
     });
     std::thread::spawn(move || {
-        if let Err(error) = listen_shortcut(app, conn) {
+        if let Err(error) = listen_shortcut(app.clone(), conn) {
             eprintln!("X11 shortcut unavailable: {error}");
         }
         if let Ok(mut state) = SHORTCUT.lock() {
             *state = None;
         }
+        crate::keyboard::set_shortcut_label(&app, None);
     });
     Ok(())
 }

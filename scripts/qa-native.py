@@ -135,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix='personal-island-qa-') as temp:
                 page.locator('.pill').click()
                 page.get_by_role('button',name='Закрепить островок').click()
                 page.wait_for_timeout(900)
-                assert page.evaluate('innerWidth') == 760
+                assert page.evaluate('innerWidth === Math.min(960, screen.availWidth)')
                 passed('Native window grows before the liquid spring expands')
                 page.get_by_role('button',name='Далее',exact=True).click()
                 expect(page.locator('.task-name')).to_have_text(['QA native shared task'])

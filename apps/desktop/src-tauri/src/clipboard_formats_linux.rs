@@ -109,7 +109,7 @@ pub(crate) fn decode_uri(uri: &str) -> Option<String> {
     (!path.contains('\0') && Path::new(&path).is_absolute()).then_some(path)
 }
 
-fn parse_uris(input: &[u8]) -> Option<Vec<String>> {
+pub(crate) fn parse_uris(input: &[u8]) -> Option<Vec<String>> {
     let input = std::str::from_utf8(input).ok()?;
     let mut paths = Vec::new();
     for line in input.lines().map(str::trim).filter(|line| !line.is_empty()) {

@@ -1,10 +1,18 @@
 {
   "bundle": {
-    "targets": ["deb", "appimage"],
+    "targets": ["deb", "rpm", "appimage"],
     "icon": ["icons/icon.png"],
     "linux": {
       "deb": {
-        "depends": ["playerctl", "pulseaudio-utils", "wl-clipboard", "xclip", "libglib2.0-bin", "xdg-utils"],
+        "depends": ["libssl3"],
+        "recommends": ["playerctl", "pulseaudio-utils", "wl-clipboard", "xclip", "libglib2.0-bin", "xdg-utils"],
+        "files": {
+          "/usr/share/applications/dev.personalisland.desktop.desktop": "linux/dev.personalisland.desktop.desktop"
+        }
+      },
+      "rpm": {
+        "depends": ["gtk3", "webkit2gtk4.1", "openssl-libs"],
+        "recommends": ["playerctl", "pulseaudio-utils", "wl-clipboard", "xclip", "glib2", "xdg-utils"],
         "files": {
           "/usr/share/applications/dev.personalisland.desktop.desktop": "linux/dev.personalisland.desktop.desktop"
         }

@@ -55,7 +55,7 @@ fn mpris_volume(session_id: &str, level: Option<f32>) -> Result<PlayerVolume, St
     })
 }
 
-fn mpris_owner_pid(session_id: &str) -> Option<u32> {
+pub(crate) fn mpris_owner_pid(session_id: &str) -> Option<u32> {
     let output = Command::new("gdbus")
         .args([
             "call",

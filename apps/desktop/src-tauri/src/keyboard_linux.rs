@@ -1,12 +1,16 @@
 //! Compositor-managed shortcut. Wayland never exposes a pass-through key hook.
-use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut, Shortcut};
 use futures_util::StreamExt;
-use std::sync::{atomic::AtomicBool, OnceLock};
+use std::sync::{atomic::AtomicBool, Mutex, OnceLock};
+use tauri::Emitter;
 use tokio::sync::{mpsc, oneshot};
 
 pub static EDITING: AtomicBool = AtomicBool::new(false);
 pub static CAPTURING: AtomicBool = AtomicBool::new(false);
+static SHORTCUT_LABEL: Mutex<Option<String>> = Mutex::new(None);
 const SHORTCUT_ID: &str = "dev.personalisland.desktop.toggle";
+const SYSTEM_SHORTCUT_HELP: &str =
+    "Назначь запуск Personal Island в настройках клавиатуры рабочего стола.";
 type ConfigureReply = oneshot::Sender<Result<(), String>>;
 static PORTAL_CONFIGURE: OnceLock<mpsc::Sender<ConfigureReply>> = OnceLock::new();
 
@@ -23,18 +27,27 @@ pub fn configure(shortcut: crate::preferences::Shortcut, _: bool) -> Result<(), 
 
 #[tauri::command]
 pub async fn configure_portal_shortcuts() -> Result<(), String> {
-    let message =
-        "Открой настройки клавиатуры рабочего стола, чтобы изменить сочетание Personal Island.";
     let (reply, result) = oneshot::channel();
     PORTAL_CONFIGURE
         .get()
-        .ok_or(message)?
+        .ok_or(SYSTEM_SHORTCUT_HELP)?
         .try_send(reply)
-        .map_err(|_| message)?;
+        .map_err(|_| SYSTEM_SHORTCUT_HELP)?;
     tokio::time::timeout(std::time::Duration::from_secs(3), result)
         .await
-        .map_err(|_| message)?
-        .map_err(|_| message)?
+        .map_err(|_| SYSTEM_SHORTCUT_HELP)?
+        .map_err(|_| SYSTEM_SHORTCUT_HELP)?
+}
+
+pub fn shortcut_label() -> Option<String> {
+    SHORTCUT_LABEL.lock().ok()?.clone()
+}
+
+pub fn set_shortcut_label(app: &tauri::AppHandle, label: Option<String>) {
+    if let Ok(mut current) = SHORTCUT_LABEL.lock() {
+        current.clone_from(&label);
+    }
+    let _ = app.emit("island-shortcut", label);
 }
 
 pub fn start(app: tauri::AppHandle) -> Result<(), String> {
@@ -51,9 +64,10 @@ pub fn start(app: tauri::AppHandle) -> Result<(), String> {
     let (configure, requests) = mpsc::channel(1);
     let _ = PORTAL_CONFIGURE.set(configure);
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = listen(app, requests).await {
+        if let Err(error) = listen(app.clone(), requests).await {
             eprintln!("Global shortcut portal unavailable: {error}");
         }
+        set_shortcut_label(&app, None);
     });
     Ok(())
 }
@@ -70,44 +84,53 @@ async fn listen(
         .create_session(Default::default())
         .await
         .map_err(|e| e.to_string())?;
+    let mut closed = session.receive_closed().await.map_err(|e| e.to_string())?;
     let mut activated = portal
         .receive_activated()
         .await
         .map_err(|e| e.to_string())?;
-    let previous = portal
-        .list_shortcuts(&session, Default::default())
+    let mut changed = portal
+        .receive_shortcuts_changed()
         .await
         .map_err(|e| e.to_string())?;
-    let bound = previous
-        .response()
+    // ListShortcuts can return saved bindings before they are active in this session.
+    let shortcut = NewShortcut::new(SHORTCUT_ID, "Показать или скрыть Personal Island")
+        .preferred_trigger(Some("CTRL+ALT+i"));
+    let bound = portal
+        .bind_shortcuts(&session, &[shortcut], None, Default::default())
+        .await
         .map_err(|e| e.to_string())?
-        .shortcuts()
-        .iter()
-        .any(|shortcut| shortcut.id() == SHORTCUT_ID);
-    if !bound {
-        let shortcut = NewShortcut::new(SHORTCUT_ID, "Показать или скрыть Personal Island")
-            .preferred_trigger(Some("<Control><Alt>i"));
-        portal
-            .bind_shortcuts(&session, &[shortcut], None, Default::default())
-            .await
-            .map_err(|e| e.to_string())?
-            .response()
-            .map_err(|e| e.to_string())?;
-    }
+        .response()
+        .map_err(|e| e.to_string())?;
+    set_shortcut_label(&app, portal_shortcut_label(bound.shortcuts()));
     loop {
         tokio::select! {
+            _ = closed.next() => break,
             event = activated.next() => {
                 let Some(event) = event else { break };
                 if event.shortcut_id() == SHORTCUT_ID {
                     let _ = crate::toggle_island_shortcut(app.clone());
                 }
             }
+            event = changed.next() => {
+                let Some(event) = event else { break };
+                set_shortcut_label(&app, portal_shortcut_label(event.shortcuts()));
+            }
             Some(reply) = requests.recv() => {
                 let result = portal.configure_shortcuts(&session, None, Default::default()).await
-                    .map_err(|_| "Открой настройки клавиатуры рабочего стола, чтобы изменить сочетание Personal Island.".into());
+                    .map_err(|_| SYSTEM_SHORTCUT_HELP.into());
                 let _ = reply.send(result);
             }
         }
     }
     Ok(())
+}
+
+fn portal_shortcut_label(shortcuts: &[Shortcut]) -> Option<String> {
+    shortcuts
+        .iter()
+        .find(|shortcut| shortcut.id() == SHORTCUT_ID)
+        .map(Shortcut::trigger_description)
+        .filter(|label| !label.is_empty())
+        .map(str::to_owned)
 }

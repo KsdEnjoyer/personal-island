@@ -6,6 +6,7 @@
   import WeatherIcon from './WeatherIcon.svelte';
   import { reviewLabel } from './widget-settings';
   import { degrees, weatherLabel } from './weather';
+  import { MUSIC_APP_NAMES, openMusicApp, type MusicApp } from './media-preference';
   import type { Task, MediaState, WeatherState, WidgetSettings } from '../types';
   export let active = false;
   export let tasks:Task[];
@@ -17,9 +18,12 @@
   export let focusTotalSeconds:number;
   export let timerRunning:boolean;
   export let widgetSettings:WidgetSettings;
+  export let shortcutLabel: string | null;
   export let pinned:boolean;
   export let reducedMotion:boolean;
   export let mediaBusy:boolean;
+  export let musicApp:MusicApp | null;
+  $: playLabel = musicApp === 'yandex-music' ? 'Включить Яндекс Музыку' : musicApp ? 'Включить Spotify' : 'Выбрать плеер';
   export let navigate:(tab:'today'|'tasks'|'calendar'|'notes'|'music'|'weather'|'clipboard')=>void;
   export let createTask:()=>void;
   export let toggleFocus:()=>void;
@@ -35,12 +39,12 @@
   let disposed = false;
   let openingMusic = false;
   let launchError = '';
-  async function openYandexMusic() {
-    if (openingMusic) return;
+  async function openPlayer() {
+    if (!musicApp || openingMusic) return;
     openingMusic = true;
     launchError = '';
-    try { await invoke('open_yandex_music'); }
-    catch { launchError = 'Не удалось открыть Яндекс Музыку. Попробуй ещё раз.'; }
+    try { await openMusicApp(musicApp); }
+    catch (err) { launchError = String(err); }
     finally { openingMusic = false; }
   }
   $: openTasks = tasks.filter(t=>t.status==='open');
@@ -80,20 +84,20 @@
       <button class="nearest-task" title={nearest?.title} on:click={()=>navigate('calendar')}>{#if nearest}<span>{nearest.title}</span><small>{due(nearest.due_at!)}</small>{:else}<span>Ближайших сроков нет</span><ArrowUpRight size={11}/>{/if}</button>
     </section>
     <section class="overview-card focus-overview" aria-label="Таймер работы">
-      <div class="card-heading"><h2><Timer size={13}/>Таймер</h2><span class:running={timerRunning}>{timerRunning ? 'Идёт фокус' : 'На паузе'}</span></div>
+      <div class="card-heading"><h2><Timer size={13}/>Таймер</h2><span class:running={timerRunning}>{timerRunning ? 'Идёт фокус' : focusSeconds === 0 ? 'Завершён' : 'На паузе'}</span></div>
       <div class="focus-line"><strong>{countdown(focusSeconds)}</strong><button class="start-focus" aria-label={timerRunning ? 'Приостановить таймер' : 'Запустить таймер'} on:click={toggleFocus}>{#if timerRunning}<Pause size={13} fill="currentColor"/>Пауза{:else}<Play size={13} fill="currentColor"/>Старт{/if}</button></div>
       <div class="focus-bottom"><span>{Math.round(focusTotalSeconds/60)} мин</span><button aria-label="Добавить минуту" on:click={addMinute}>+1 мин</button><button aria-label="Сбросить таймер" on:click={resetFocus}><RotateCcw size={11}/></button></div>
       <div class="focus-progress" aria-hidden="true"><i style:width={`${Math.max(0,Math.min(100,100*(1-focusSeconds/focusTotalSeconds)))}%`} style:transition={reducedMotion ? 'none' : undefined}></i></div>
     </section>
     <section class="overview-card music-overview" aria-label="Музыка в обзоре">
       {#if launchError || mediaError}<p class="launch-error" role="alert">{launchError || mediaError}</p>{/if}
-      <div class="card-heading"><h2><Music2 size={13}/>Музыка</h2><div class="music-actions"><button class="launch-music" aria-label="Открыть Яндекс Музыку" title="Открыть Яндекс Музыку" disabled={openingMusic} aria-busy={openingMusic} on:click={openYandexMusic}>Яндекс Музыка<ExternalLink size={10}/></button><button class="small-action" aria-label="Открыть музыкальный плеер" on:click={()=>navigate('music')}><ArrowUpRight size={14}/></button></div></div>
+      <div class="card-heading"><h2><Music2 size={13}/>Музыка</h2><div class="music-actions">{#if musicApp}<button class="launch-music" aria-label={musicApp === 'yandex-music' ? 'Открыть Яндекс Музыку' : 'Открыть Spotify'} disabled={openingMusic} aria-busy={openingMusic} on:click={openPlayer}>{MUSIC_APP_NAMES[musicApp]}<ExternalLink size={10}/></button>{/if}<button class="small-action" aria-label="Открыть музыкальный плеер" on:click={()=>navigate('music')}><ArrowUpRight size={14}/></button></div></div>
       <div class="home-track">
-        <button class="home-cover" aria-label={media?.playing ? 'Приостановить музыку' : media?.session_id ? 'Продолжить музыку' : 'Включить Яндекс Музыку'} aria-busy={mediaBusy} disabled={mediaBusy} on:click={()=>{launchError='';playMusic();}}>{#if media?.artwork}<img src={media.artwork} alt="Обложка трека"/>{:else if !media?.session_id}<Play size={19} fill="currentColor"/>{:else}<Music2 size={21}/>{/if}{#if media?.session_id}<span>{#if media.playing}<Pause size={14} fill="currentColor"/>{:else}<Play size={14} fill="currentColor"/>{/if}</span>{/if}</button>
-        <button class="home-track-title" title={mediaError || media?.title} on:click={()=>navigate('music')}><b>{mediaBusy ? 'Подключаем плеер…' : media?.title || 'Включить музыку'}</b><small>{mediaError ? 'Попробуй ещё раз' : mediaBusy ? 'Дождись начала воспроизведения' : media?.session_id ? `${media.playing ? 'Играет' : 'Пауза'} · ${media.artist || media.source}` : 'Play запустит Яндекс Музыку'}</small></button>
+        <button class="home-cover" aria-label={media?.playing ? 'Приостановить музыку' : media?.session_id ? 'Продолжить музыку' : playLabel} aria-busy={mediaBusy} disabled={mediaBusy} on:click={()=>{launchError='';playMusic();}}>{#if media?.artwork}<img src={media.artwork} alt="Обложка трека"/>{:else if !media?.session_id}<Play size={19} fill="currentColor"/>{:else}<Music2 size={21}/>{/if}{#if media?.session_id}<span>{#if media.playing}<Pause size={14} fill="currentColor"/>{:else}<Play size={14} fill="currentColor"/>{/if}</span>{/if}</button>
+        <button class="home-track-title" title={mediaError || media?.title} on:click={()=>navigate('music')}><b>{mediaBusy ? 'Подключаем плеер…' : media?.title || 'Включить музыку'}</b><small>{mediaError ? 'Попробуй ещё раз' : mediaBusy ? 'Дождись начала воспроизведения' : media?.session_id ? `${media.playing ? 'Играет' : 'Пауза'} · ${media.artist || media.source}` : musicApp ? `Play откроет «${MUSIC_APP_NAMES[musicApp]}»` : 'Выбери приложение во вкладке «Музыка»'}</small></button>
         <div class="home-transport">
           <button aria-label="Предыдущий трек" disabled={!media?.can_previous || mediaBusy} on:click={()=>mediaCommand('previous')}><SkipBack size={13} fill="currentColor"/></button>
-          <button class="home-play" aria-label={media?.playing ? 'Приостановить музыку' : media?.session_id ? 'Продолжить музыку' : 'Включить Яндекс Музыку'} title={media?.playing ? 'Пауза' : 'Воспроизвести'} aria-busy={mediaBusy} disabled={mediaBusy} on:click={()=>{launchError='';playMusic();}}>{#if media?.playing}<Pause size={14} fill="currentColor"/>{:else}<Play size={14} fill="currentColor"/>{/if}</button>
+          <button class="home-play" aria-label={media?.playing ? 'Приостановить музыку' : media?.session_id ? 'Продолжить музыку' : playLabel} title={media?.playing ? 'Пауза' : 'Воспроизвести'} aria-busy={mediaBusy} disabled={mediaBusy} on:click={()=>{launchError='';playMusic();}}>{#if media?.playing}<Pause size={14} fill="currentColor"/>{:else}<Play size={14} fill="currentColor"/>{/if}</button>
           <button aria-label="Следующий трек" disabled={!media?.can_next || mediaBusy} on:click={()=>mediaCommand('next')}><SkipForward size={13} fill="currentColor"/></button>
         </div>
       </div>
@@ -109,7 +113,10 @@
       <span class="card-heading"><span class="card-title"><Clipboard size={13}/>Буфер обмена</span><span class="capture-status" class:paused={summary?.capturing===false}><i></i>{summaryError ? 'Нет данных' : summary ? summary.capturing ? 'Запись' : 'Пауза' : '…'}</span></span><span class="clipboard-stats"><span>{recordCount(summaryError ? undefined : summary?.clipboard)}</span><span>{summaryError ? '—' : summary?.pinned ?? '—'} закреплено</span></span>
     </button>
   </div>
-  <div class="widget-status"><span>{reviewLabel(widgetSettings.review_interval_minutes)}</span><button aria-label="Открыть настройки виджета" on:click={openSettings}><SlidersHorizontal size={11}/>Настройки</button></div>
+  <div class="widget-status">
+    {#if shortcutLabel}<span><kbd>{shortcutLabel}</kbd>Показать</span>{/if}
+    <span>{reviewLabel(widgetSettings.review_interval_minutes)}</span><button aria-label="Открыть настройки виджета" on:click={openSettings}><SlidersHorizontal size={11}/>Настройки</button>
+  </div>
 </section>
 
 <style>

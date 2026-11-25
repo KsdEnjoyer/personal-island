@@ -12,6 +12,9 @@ mod clipboard_formats;
 #[cfg(target_os = "linux")]
 #[path = "clipboard_formats_linux.rs"]
 mod clipboard_formats;
+mod focus_timer;
+#[cfg(target_os = "linux")]
+mod gnome_island;
 #[cfg(windows)]
 mod keyboard;
 #[cfg(target_os = "linux")]
@@ -47,8 +50,8 @@ use std::sync::Arc;
 // Transparent room for the shoulders, liquid edge and its shadow.
 const COLLAPSED_W: f64 = 480.0;
 const COLLAPSED_H: f64 = 196.0;
-const EXPANDED_W: f64 = 760.0;
-const EXPANDED_H: f64 = 520.0;
+const EXPANDED_W: f64 = 960.0;
+const EXPANDED_H: f64 = 640.0;
 
 #[derive(Default)]
 struct IslandPresentation {
@@ -59,6 +62,7 @@ struct IslandPresentation {
     reminder_active: AtomicBool,
     review_active: AtomicBool,
     portrait: AtomicBool,
+    panel_height: AtomicU32,
 }
 
 #[tauri::command]
@@ -69,14 +73,13 @@ fn set_island_appearance(app: tauri::AppHandle, portrait: bool) {
 }
 
 #[tauri::command]
-fn register_island_shortcut(app: tauri::AppHandle) -> Result<(), String> {
+fn register_island_shortcut(app: tauri::AppHandle) -> Result<u32, String> {
     // The frontend subscribes before this command, including after a dev reload.
 
-    app.state::<IslandPresentation>()
-        .ready
-        .store(true, Ordering::SeqCst);
+    let state = app.state::<IslandPresentation>();
+    state.ready.store(true, Ordering::SeqCst);
     reveal_compact(&app, "startup")?;
-    Ok(())
+    Ok(state.panel_height.load(Ordering::SeqCst))
 }
 
 #[tauri::command]
@@ -130,6 +133,10 @@ fn reveal_compact(app: &tauri::AppHandle, reason: &str) -> Result<(), String> {
     window.set_focusable(false).map_err(|e| e.to_string())?;
     resize_and_anchor(&window, false).map_err(|e| e.to_string())?;
     window.show().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    window
+        .set_ignore_cursor_events(state.panel_height.load(Ordering::SeqCst) != 0)
+        .map_err(|e| e.to_string())?;
     window
         .emit(
             "island-reveal",
@@ -310,7 +317,7 @@ async fn delete_task(store: tauri::State<'_, TaskStore>, id: i64) -> Result<(), 
 
 fn resize_and_anchor(window: &tauri::WebviewWindow, expanded: bool) -> tauri::Result<()> {
     let (w, h) = if expanded {
-        (EXPANDED_W, EXPANDED_H)
+        dashboard_size(window)?
     } else {
         compact_size(&window.state::<IslandPresentation>())
     };
@@ -330,6 +337,18 @@ fn compact_size(state: &IslandPresentation) -> (f64, f64) {
         state.portrait.load(Ordering::SeqCst),
         state.compact_mode.load(Ordering::SeqCst),
     )
+}
+
+fn dashboard_size(window: &tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok((EXPANDED_W, EXPANDED_H));
+    };
+    let area = monitor.work_area().size;
+    let scale = monitor.scale_factor();
+    Ok((
+        EXPANDED_W.min((area.width as f64 / scale).floor()),
+        EXPANDED_H.min((area.height as f64 / scale).floor()),
+    ))
 }
 
 fn calendar_size(screen_w: f64, screen_h: f64) -> (f64, f64) {
@@ -430,10 +449,23 @@ mod layout_tests {
 
 fn anchor_size(window: &tauri::WebviewWindow, w: f64, h: f64) -> tauri::Result<()> {
     window.set_size(Size::Logical(LogicalSize::new(w, h)))?;
+    #[cfg(target_os = "linux")]
+    if window
+        .state::<IslandPresentation>()
+        .panel_height
+        .load(Ordering::SeqCst)
+        != 0
+    {
+        // The extension anchors the surface to the actual GNOME panel slot.
+        return Ok(());
+    }
     if let Some(monitor) = window.current_monitor()? {
         let scale = monitor.scale_factor();
         let x =
             monitor.position().x + (monitor.size().width as i32 - (w * scale).round() as i32) / 2;
+        #[cfg(target_os = "linux")]
+        let y = monitor.work_area().position.y;
+        #[cfg(not(target_os = "linux"))]
         let y = monitor.position().y;
         window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
     }
@@ -471,14 +503,35 @@ fn set_island_expanded(
             (1280.0, 820.0)
         }
     } else if expanded {
-        (EXPANDED_W, EXPANDED_H)
+        dashboard_size(&window).map_err(|e| e.to_string())?
     } else {
         compact_size(&window.state::<IslandPresentation>())
     };
-    anchor_size(&window, size.0, size.1).map_err(|e| e.to_string())?;
+    let panel_height = window
+        .state::<IslandPresentation>()
+        .panel_height
+        .load(Ordering::SeqCst);
+    anchor_size(
+        &window,
+        size.0,
+        size.1
+            + if expanded {
+                f64::from(panel_height)
+            } else {
+                0.0
+            },
+    )
+    .map_err(|e| e.to_string())?;
     window.set_focusable(expanded).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    window
+        .set_ignore_cursor_events(panel_height != 0 && !expanded)
+        .map_err(|e| e.to_string())?;
     if expanded {
         window.show().map_err(|e| e.to_string())?;
+        if panel_height != 0 {
+            window.set_focus().map_err(|e| e.to_string())?;
+        }
     }
     Ok(size)
 }
@@ -550,7 +603,16 @@ fn get_platform_capabilities() -> serde_json::Value {
     } else {
         "portal"
     };
-    serde_json::json!({"automaticPaste": true, "shortcutMode": shortcut_mode})
+    #[cfg(target_os = "linux")]
+    let shortcut_label = keyboard::shortcut_label();
+    #[cfg(not(target_os = "linux"))]
+    let shortcut_label = Some("Ё / `");
+    serde_json::json!({
+        "automaticPaste": cfg!(windows) || cfg!(target_os = "linux"),
+        "shortcutMode": shortcut_mode,
+        "musicAppBinding": cfg!(target_os = "linux"),
+        "shortcutLabel": shortcut_label,
+    })
 }
 
 #[tauri::command]
@@ -582,6 +644,7 @@ async fn pointer_loop(app: tauri::AppHandle) {
         let Some(window) = app.get_webview_window("main") else {
             break;
         };
+        focus_timer::check(&app, &window);
         if window.is_visible().ok() != Some(true) {
             continue;
         }
@@ -771,6 +834,7 @@ pub fn run() {
         .manage(media::MediaPreference::default())
         .manage(media::MediaNotifications::default())
         .manage(IslandPresentation::default())
+        .manage(focus_timer::FocusTimer::default())
         .manage(Arc::new(PasteTarget::default()))
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             let _ = reveal_compact(app, "manual");
@@ -823,6 +887,8 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 resize_and_anchor(&window, false)?;
             }
+            #[cfg(target_os = "linux")]
+            tauri::async_runtime::spawn(gnome_island::serve(app.handle().clone()));
             tauri::async_runtime::spawn(notification_loop(app.handle().clone(), store));
             tauri::async_runtime::spawn(media::watch(app.handle().clone()));
             tauri::async_runtime::spawn(pointer_loop(app.handle().clone()));
@@ -849,6 +915,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             keyboard::configure_portal_shortcuts,
             register_island_shortcut,
+            focus_timer::set_focus_timer_deadline,
             toggle_island_shortcut,
             reveal_island_shortcut,
             set_island_shortcut_editing,
@@ -871,6 +938,10 @@ pub fn run() {
             audio_reactivity::get_audio_reactivity,
             media::open_yandex_music,
             media::start_yandex_music,
+            #[cfg(target_os = "linux")]
+            media::open_spotify,
+            #[cfg(target_os = "linux")]
+            media::start_spotify,
             weather::get_weather,
             weather::open_weather_source,
             exit_app,

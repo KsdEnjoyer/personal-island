@@ -29,17 +29,19 @@ with tempfile.TemporaryDirectory(prefix='island-calendar-') as temp:
                     return proc,browser,page
                 proc,browser,page=start();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
                 def invoke(cmd,args=None):return page.evaluate('([cmd,args])=>__TAURI_INTERNALS__.invoke(cmd,args)',[cmd,args or {}])
-                assert page.evaluate('[innerWidth,innerHeight]')==[760,520]
+                dashboard_size=page.evaluate('[Math.min(960, screen.availWidth), Math.min(640, screen.availHeight)]')
+                assert page.evaluate('[innerWidth,innerHeight]')==dashboard_size
                 page.get_by_role('button',name='Календарь',exact=True).click();expect(page.locator('.dashboard')).to_have_attribute('aria-busy','false')
-                assert page.evaluate('[innerWidth,innerHeight]')==[760,520]
+                assert page.evaluate('[innerWidth,innerHeight]')==dashboard_size
                 expect(page.locator('.time-grid')).to_have_count(0)
                 page.locator('.calendar-day.selected').click()
-                assert page.evaluate('[innerWidth,innerHeight]')==[760,520]
+                assert page.evaluate('[innerWidth,innerHeight]')==dashboard_size
                 page.screenshot(path=str(OUT/'calendar-native-compact.png'))
                 page.locator('.calendar-day.selected').dblclick();expect(page.locator('.dashboard')).to_have_attribute('aria-busy','false')
                 size=page.evaluate('({w:innerWidth,h:innerHeight,sw:screen.width,sh:screen.height})')
                 assert size['w']<=size['sw']-31 and size['h']<=size['sh']-69,size # WebView rounds physical pixels to CSS pixels.
-                assert size['w']>760 and size['w']<=1280 and size['h']<=820,size
+                assert size['w']<=1280 and size['h']<=820,size
+                expect(page.locator('.time-grid')).to_be_visible()
                 assert page.locator('.dashboard').evaluate('e=>e.clientWidth')==size['w']-56
                 passed('Native calendar stays compact on entry/single click; a double click opens the monitor-fitted weekly planner')
                 when=page.evaluate("()=>{let d=new Date();d.setDate(d.getDate()+2);d.setHours(14,30,0,0);return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}")
@@ -79,13 +81,13 @@ with tempfile.TemporaryDirectory(prefix='island-calendar-') as temp:
                 page.screenshot(path=str(OUT/'calendar-native.png'))
                 page.get_by_role('button',name='Открыть все заметки').click();expect(page.locator('.dashboard')).to_have_attribute('aria-busy','false')
                 expect(page.get_by_label('Название записи')).to_have_value('Заметка из нового календаря',timeout=20000)
-                assert page.evaluate('[innerWidth,innerHeight]')==[760,520]
+                assert page.evaluate('[innerWidth,innerHeight]')==dashboard_size
                 page.get_by_role('button',name='Календарь',exact=True).click();expect(page.locator('.dashboard')).to_have_attribute('aria-busy','false')
-                assert page.evaluate('[innerWidth,innerHeight]')==[760,520]
+                assert page.evaluate('[innerWidth,innerHeight]')==dashboard_size
                 page.locator('.calendar-day.selected').dblclick();expect(page.locator('.dashboard')).to_have_attribute('aria-busy','false')
                 old_generation=json.loads(page.locator('.island-shell').get_attribute('data-presentation'))['activeGeneration']
                 page.keyboard.press('Escape');expect(page.locator('.compact-month')).to_be_visible();expect(page.locator('.dashboard')).to_have_attribute('aria-busy','false')
-                assert page.evaluate('[innerWidth,innerHeight]')==[760,520]
+                assert page.evaluate('[innerWidth,innerHeight]')==dashboard_size
                 page.keyboard.press('Escape');expect(page.locator('.island-shell')).to_have_attribute('aria-hidden','true')
                 assert page.evaluate('[innerWidth,innerHeight]')==[480,196]
                 invoke('register_island_shortcut');expect(page.locator('.island-shell')).to_have_attribute('aria-hidden','false')
@@ -93,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='island-calendar-') as temp:
                 assert page.evaluate('[innerWidth,innerHeight]')==[480,196],'An old generation must not restore the calendar'
                 expect(page.locator('.dashboard')).to_have_attribute('aria-hidden','true')
                 page.locator('.pill').click();expect(page.locator('.dashboard')).to_have_attribute('aria-hidden','false');expect(page.locator('.dashboard')).to_have_attribute('aria-busy','false')
-                assert page.evaluate('[innerWidth,innerHeight]')==[760,520]
+                assert page.evaluate('[innerWidth,innerHeight]')==dashboard_size
                 expect(page.locator('.time-grid')).to_have_count(0)
                 passed('Leaving calendar restores normal size; Escape returns to compact size and a manual native reveal reopens the island correctly')
                 page.get_by_role('button',name='Настройки',exact=True).click();page.get_by_role('button',name='Выход',exact=True).click();proc.wait(timeout=15);browser.close()

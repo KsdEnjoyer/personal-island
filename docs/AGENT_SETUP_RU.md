@@ -64,11 +64,10 @@ cargo check --locked -p task-mcp
 npm --prefix apps/desktop run tauri -- build
 ```
 
-Пакеты будут в `target/release/bundle/deb/` и
-`target/release/bundle/appimage/`. Для запуска из
-исходников используй `npm --prefix apps/desktop run tauri -- dev`. Системные
-разрешения для горячей клавиши и вставки, а также зависимости AppImage
-описаны в [README](../README.md).
+Пакеты будут в `target/release/bundle/`. Чтобы добавить собранное приложение
+в меню, выполни `./scripts/create-desktop-shortcut.sh` из корня репозитория.
+Системные разрешения для горячей клавиши и вставки, а также запуск AppImage
+описаны в [README](../README.md#запуск-на-linux).
 
 ## 3. Локальный MCP — основной способ подключения
 

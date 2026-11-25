@@ -3,15 +3,15 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { Bell, CalendarDays, Check, ChevronDown, Clock3, Flag, ListTodo, House,
-    Pause, Pencil, Pin, Play, Plus, Power, RotateCcw, SlidersHorizontal, Trash2, X, Clipboard, Music2, CloudSun, SkipBack, SkipForward, NotebookPen } from 'lucide-svelte';
-  import { createLiquidIsland, type AudioFrame } from './lib/liquid';
+    Pause, Pencil, Pin, Play, Plus, Power, RotateCcw, SlidersHorizontal, Timer, Trash2, X, Clipboard, Music2, CloudSun, SkipBack, SkipForward, NotebookPen } from 'lucide-svelte';
+  import { createLiquidIsland, ISLAND, type AudioFrame } from './lib/liquid';
   import PlayerVolume from './lib/PlayerVolume.svelte';
   import SelectionToolbar from './lib/SelectionToolbar.svelte';
   import FormattedInput from './lib/FormattedInput.svelte';
   import FormattedText from './lib/FormattedText.svelte';
   import TimerDuration from './lib/TimerDuration.svelte';
   import WidgetPreferences from './lib/WidgetPreferences.svelte';
-  import { defaultWidgetSettings } from './lib/widget-settings';
+  import { defaultWidgetSettings, shortcutLabel as formatShortcut, type ShortcutMode } from './lib/widget-settings';
   import CalendarPanel from './lib/CalendarPanel.svelte';
   import ClipboardPanel from './lib/ClipboardPanel.svelte';
   import MusicPanel from './lib/MusicPanel.svelte';
@@ -25,11 +25,13 @@
   import AppearancePicker from './lib/AppearancePicker.svelte';
   import CapriFace from './lib/CapriFace.svelte';
   import { loadAppearance, saveAppearance, type IslandAppearance } from './lib/appearance';
+  import { loadMediaPreference, musicAppId, saveMediaPreference, type MusicApp } from './lib/media-preference';
   import { degrees, weatherLabel } from './lib/weather';
   import { createPresence } from './lib/presence';
   import type { MediaState, NewTask, Task, WeatherState, WidgetSettings } from './types';
 
   type Tab = 'home' | 'today' | 'tasks' | 'calendar' | 'done' | 'clipboard' | 'music' | 'weather' | 'notes';
+  type IslandReveal = number | {generation: number; reason: 'manual' | 'track' | 'hourly' | 'startup' | 'focus'};
   const tabs: { id: Tab; label: string; icon: typeof ListTodo }[] = [
     { id: 'home', label: 'Главная', icon: House },
     { id: 'today', label: 'Сегодня', icon: Clock3 },
@@ -43,8 +45,11 @@
   ];
   let tasks: Task[] = [];
   let expanded = false;
-  let panelWidth = 704;
-  let panelHeight = 458;
+  const windowPadding = { width: 56, height: 62 };
+  const calendarWindowSize: [number, number] = [1280, 820];
+  let panelWidth = ISLAND.expanded.width;
+  let panelHeight = ISLAND.expanded.height;
+  let dashboardSize: [number, number] = [panelWidth + windowPadding.width, panelHeight + windowPadding.height];
   let layoutBusy = false;
   let queuedTab:Tab | null = null;
   let calendarBusy = false;
@@ -59,10 +64,14 @@
   let nativeOutsideSince = 0;
   let shortcutEditing = false;
   let shortcutReady = false;
+  let nativeShortcutLabel: string | null = null;
+  let panelOffset = 0;
   let automaticPaste = true;
-  let shortcutMode: import('./lib/widget-settings').ShortcutMode = 'windows';
+  let shortcutMode: ShortcutMode = 'windows';
+  let musicAppBinding = false;
   const REVEAL_MS = 5_000;
   const TRACK_REVEAL_MS = 3_000;
+  const FOCUS_ALERT_MS = 10_000;
   let tab: Tab = 'home';
   let showForm = false;
   let notesPanel: { flush: () => Promise<boolean> } | undefined;
@@ -83,6 +92,7 @@
   let pinned = false;
   let settingsOpen = false;
   let widgetSettings: WidgetSettings = defaultWidgetSettings;
+  $: shortcutLabel = shortcutMode === 'windows' ? formatShortcut(widgetSettings.shortcut) : nativeShortcutLabel;
   let settingsBusy = false;
   let settingsError = '';
   let liquidEnabled = true;
@@ -103,7 +113,11 @@
   let presence: ReturnType<typeof createPresence> | undefined;
   let media: MediaState | null = null;
   let mediaError = '';
-  let preferredMedia: string | null = null;
+  let preferredMedia = loadMediaPreference();
+  let homeMusicApp: MusicApp | null;
+  $: homeMusicApp = musicAppBinding ? musicAppId(preferredMedia) ??
+    media?.sessions.find(session => session.id === media?.session_id)?.app ??
+    media?.available_apps?.[0] ?? null : 'yandex-music';
   let mediaRequest = 0;
   let mediaLoading = false;
   let lastMediaEvent = 0;
@@ -144,10 +158,11 @@
     extendReviewLease(reviewItems.length);
     void acknowledgeReview(reviewedTask, activeGeneration);
   }
-  $: capriMode = appearance === 'portrait' && compactMode === 'manual' && !activeReminder && !reviewedTask;
+  $: compactFocusAlert = focusAlert && !activeReminder;
+  $: capriMode = appearance === 'portrait' && compactMode === 'manual' && !activeReminder && !reviewedTask && !compactFocusAlert;
   $: capriCompact = capriMode && !expanded;
-  $: compactWidth = capriMode ? 272 : compactMode === 'reminder' ? reminderPhase === 'bell' ? 96 : 272 : compactMode === 'manual' ? 272 : 360;
-  $: compactHeight = capriMode ? 104 : compactMode === 'reminder' ? reminderPhase === 'bell' ? 40 : 56 : compactMode === 'manual' ? 56 : 76;
+  $: compactWidth = capriMode || compactFocusAlert ? 272 : compactMode === 'reminder' ? reminderPhase === 'bell' ? 96 : 272 : compactMode === 'manual' ? 272 : 360;
+  $: compactHeight = compactFocusAlert ? 56 : capriMode ? 104 : compactMode === 'reminder' ? reminderPhase === 'bell' ? 40 : 56 : compactMode === 'manual' ? 56 : 76;
   $: if (liquid && !expanded) liquid.setCompact(compactWidth, compactHeight);
   $: overlayNeeded = visible && !expanded && compactPlayback && (coverVolumeOpen || (musicPeek && volumeOpen));
   $: if (overlayNeeded !== overlayRequested || overlayGeneration !== activeGeneration) {
@@ -181,14 +196,19 @@
     if (mediaBusy) return;
     mediaError = '';
     if (media?.session_id && media.can_toggle && await compactCommand('toggle')) return;
+    if (!homeMusicApp) { await selectTab('music'); return; }
     mediaError = '';
     mediaBusy = true;
+    const source = preferredMedia;
     try {
-      const playing = await invoke<MediaState>('start_yandex_music');
+      const playing = await invoke<MediaState>(homeMusicApp === 'spotify-app' ? 'start_spotify' : 'start_yandex_music');
+      if (source !== preferredMedia) return;
       mediaRequest++;
-      preferredMedia = playing.session_id;
+      mediaLoading = false;
+      if (!musicAppId(preferredMedia)) preferredMedia = playing.session_id;
       media = playing;
       lastMediaEvent = Date.now();
+      void refreshMedia(true);
     } catch (err) { mediaError = String(err); }
     finally { mediaBusy = false; }
   }
@@ -200,6 +220,9 @@
   let focusTotalSeconds = focusSeconds;
   let timerRunning = false;
   let timerEndsAt = 0;
+  let focusAlert = false;
+  let focusAlertTimer: ReturnType<typeof setTimeout> | undefined;
+  let focusTimerRequest = Promise.resolve();
 
   const toLocalInput = (value?: string | null) => {
     if (!value) return '';
@@ -294,8 +317,8 @@
     clearTimeout(highlightTimer);
     highlightTimer = setTimeout(() => highlightedTask = null, 4_000);
   }
-  async function refreshMedia() {
-    if (mediaLoading) return;
+  async function refreshMedia(sourceChanged = false) {
+    if (mediaLoading && !sourceChanged) return;
     const version = ++mediaRequest;
     mediaLoading = true;
     try {
@@ -303,6 +326,16 @@
       if (version === mediaRequest) { media = result; mediaError = ''; }
     } catch (err) { if (version === mediaRequest) mediaError = String(err); }
     finally { if (version === mediaRequest) mediaLoading = false; }
+  }
+  async function selectMediaSource(source: string | null) {
+    if (source === preferredMedia) return;
+    preferredMedia = source;
+    saveMediaPreference(source);
+    const target = musicAppId(source);
+    if (target && !media?.sessions.some(session => session.app === target && session.id === media?.session_id)) {
+      if (media) media = { ...media, session_id: null, playing: false };
+    }
+    await refreshMedia(true);
   }
   async function refreshWeather() {
     if (weatherLoading) return;
@@ -339,7 +372,7 @@
         const wide = tab === 'calendar' && calendarPlanner;
         const size = await invoke<[number,number] | undefined>('set_island_expanded', { expanded: true, generation: activeGeneration, calendar: wide });
         if (version !== transition) return;
-        setPanelSize(size || (wide ? [1280,820] : [760,520]));
+        setPanelSize(wide, size);
         expanded = true; await liquid?.setExpanded(true);
       } catch (err) { error = String(err); }
     } else {
@@ -364,7 +397,7 @@
     }, Math.max(650, revealUntil - Date.now()));
   }
   function canAutoHide() {
-    return !activeReminder && !reminderBusy && !reminderClosing && !showForm && editId === null && deleteId === null && !busy && !mediaBusy && !layoutBusy && !calendarBusy && !(nativeHovered ?? hovered) && !pinned && !settingsOpen && !shortcutEditing;
+    return (!panelOffset || expanded) && !focusAlert && !activeReminder && !reminderBusy && !reminderClosing && !showForm && editId === null && deleteId === null && !busy && !mediaBusy && !layoutBusy && !calendarBusy && !(nativeHovered ?? hovered) && !pinned && !settingsOpen && !shortcutEditing;
   }
   function receiveReminders(incoming: Task[]) {
     for (const task of incoming) {
@@ -391,7 +424,7 @@
     finally { reminderAckBusy = false; }
   }
   async function presentNextReminder() {
-    if (reviewActive || activeReminder || reminderBusy || reminderClosing || dismissing || layoutBusy || calendarBusy || !reminderQueue.length || Date.now() < reminderDeferredUntil) return;
+    if (focusAlert || reviewActive || activeReminder || reminderBusy || reminderClosing || dismissing || layoutBusy || calendarBusy || !reminderQueue.length || Date.now() < reminderDeferredUntil) return;
     reminderBusy = true;
     const candidate = reminderQueue[0];
     reminderQueue = reminderQueue.slice(1);
@@ -475,7 +508,7 @@
   function nativePointer(inside: boolean) {
     liquid?.flushOverdueTransition();
     presence?.flush();
-    if (!visible || dismissing) return;
+    if (!visible || dismissing || (panelOffset && !expanded)) return;
     const wasInside = nativeHovered === true;
     nativeHovered = inside;
     expireReminder();
@@ -484,6 +517,10 @@
     if (Date.now() >= revealUntil && Date.now() - nativeOutsideSince >= 650 && canAutoHide()) void hideIsland();
   }
   async function toggleFromShortcut() {
+    if (panelOffset && visible && !expanded) {
+      await openDashboard();
+      return;
+    }
     if (visible && !dismissing) {
       await hideIsland(true);
     } else {
@@ -491,7 +528,7 @@
       catch (err) { error = String(err); }
     }
   }
-  async function revealFromShortcut(payload: number | {generation: number; reason: 'manual' | 'track' | 'hourly' | 'startup'}) {
+  async function revealFromShortcut(payload: IslandReveal) {
     if (activeReminder && typeof payload !== 'number' && payload.reason !== 'manual') return;
     if (reviewActive && visible && !dismissing && typeof payload !== 'number' && payload.reason === 'track') return;
     reminderVersion++;
@@ -499,7 +536,7 @@
     reminderDeferredUntil = Date.now() + REVEAL_MS;
     const generation = typeof payload === 'number' ? payload : payload.generation;
     compactMode = typeof payload !== 'number' && payload.reason === 'track' ? 'track' : 'manual';
-    reviewActive = typeof payload !== 'number' && (payload.reason === 'startup' || payload.reason === 'hourly');
+    reviewActive = !panelOffset && typeof payload !== 'number' && (payload.reason === 'startup' || payload.reason === 'hourly');
     reviewIndex = 0; reviewNextAt = Date.now() + 4_500; reviewLeaseExtended = false;
     volumeOpen = false; coverVolumeOpen = false;
     const animateIn = !visible || dismissing;
@@ -513,7 +550,8 @@
     void refresh();
     void refreshMedia();
     void refreshWeather();
-    revealUntil = Date.now() + (compactMode === 'track' ? TRACK_REVEAL_MS : REVEAL_MS);
+    const reason = typeof payload === 'number' ? 'manual' : payload.reason;
+    revealUntil = Date.now() + (reason === 'focus' ? FOCUS_ALERT_MS : reason === 'track' ? TRACK_REVEAL_MS : REVEAL_MS);
     nativeOutsideSince = Date.now();
     clearTimeout(revealTimer); clearTimeout(collapseTimer);
     showForm = false; editId = null; deleteId = null; pinned = false;
@@ -531,6 +569,10 @@
   async function openDashboard() {
     reviewActive = false;
     volumeOpen = false; coverVolumeOpen = false;
+    if (panelOffset) {
+      revealUntil = Date.now() + REVEAL_MS;
+      nativeOutsideSince = 0;
+    }
     if (dismissing) void presence?.show();
     ++presentationVersion;
     dismissing = false;
@@ -556,18 +598,31 @@
       layoutBusy = true;
       const version = ++transition;
       try {
-        if (!wide) { setPanelSize([760,520]); await liquid?.setExpanded(true); }
+        if (!wide) { setPanelSize(false); await liquid?.setExpanded(true); }
         if (version !== transition) return;
         const size = await invoke<[number,number] | undefined>('set_island_expanded',{expanded:true,generation:activeGeneration,calendar:wide});
         if (version !== transition) return;
-        setPanelSize(size || (wide ? [1280,820] : [760,520]));
+        setPanelSize(wide, size);
         await liquid?.setExpanded(true);
       } catch (err) { error = String(err); }
       finally { layoutBusy = false; if (queuedTab) { const next = queuedTab; queuedTab = null; void selectTab(next); } }
   }
-  function setPanelSize(size:[number,number]) { panelWidth = size[0]-56; panelHeight = size[1]-62; liquid?.setExpandedSize(panelWidth,panelHeight); }
+  function setPanelSize(wide: boolean, size?: [number, number]) {
+    if (size && !wide) dashboardSize = size;
+    const [width, height] = size ?? (wide ? calendarWindowSize : dashboardSize);
+    panelWidth = width - windowPadding.width;
+    panelHeight = height - windowPadding.height;
+    liquid?.setExpandedSize(panelWidth, panelHeight + panelOffset);
+  }
   async function hideIsland(force = false) {
     if (dismissing || !visible) return;
+    if (panelOffset) {
+      if (expanded && notesPanel && !await notesPanel.flush()) return;
+      pinned = false;
+      volumeOpen = false;
+      await setExpanded(false);
+      return;
+    }
     reviewActive = false;
     dismissing = true;
     forceHiding = force;
@@ -676,24 +731,62 @@
     } catch (err) { error = String(err); }
   }
   async function exitApp() { try { if (notesPanel && !await notesPanel.flush()) return; await invoke('exit_app'); } catch (err) { error = String(err); } }
+  function setFocusDeadline(deadline: number) {
+    timerEndsAt = deadline;
+    focusTimerRequest = focusTimerRequest
+      .then(() => invoke<void>('set_focus_timer_deadline', { deadline: deadline || null }))
+      .catch(err => console.error('Could not update the focus timer alarm', err));
+  }
+  function clearFocusAlert() {
+    clearTimeout(focusAlertTimer);
+    focusAlert = false;
+  }
+  function finishFocus(deadline: number) {
+    if (deadline !== timerEndsAt) return;
+    timerEndsAt = 0;
+    timerRunning = false;
+    focusSeconds = 0;
+    clearFocusAlert();
+    focusAlert = true;
+    liquid?.celebrate();
+    focusAlertTimer = setTimeout(() => {
+      focusAlert = false;
+      if (visible && !expanded && Date.now() >= revealUntil && canAutoHide()) void hideIsland();
+    }, FOCUS_ALERT_MS);
+  }
   function setFocusMinutes(minutes: number) {
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) return;
-    focusMinutes = minutes; focusSeconds = minutes * 60; focusTotalSeconds = focusSeconds; timerRunning = false;
+    clearFocusAlert();
+    setFocusDeadline(0);
+    focusMinutes = minutes;
+    focusSeconds = minutes * 60;
+    focusTotalSeconds = focusSeconds;
+    timerRunning = false;
     try { localStorage.setItem('personal-island.focus-minutes.v1', String(minutes)); } catch { /* Current timer still works. */ }
   }
   function addFocusMinutes(minutes: number) {
     if (!Number.isInteger(minutes) || minutes < 1 || focusTotalSeconds + minutes * 60 > 4 * 3600) return;
-    focusSeconds = (timerRunning ? Math.max(0,Math.ceil((timerEndsAt-Date.now())/1000)) : focusSeconds) + minutes * 60;
+    const timestamp = Date.now();
+    const remaining = timerRunning ? Math.ceil((timerEndsAt - timestamp) / 1000) : focusSeconds;
+    if (timerRunning && remaining <= 0) return;
+    if (!timerRunning && remaining === 0) clearFocusAlert();
+    focusSeconds = remaining + minutes * 60;
     focusTotalSeconds += minutes * 60;
-    if (timerRunning) timerEndsAt += minutes * 60000;
+    if (timerRunning) setFocusDeadline(timerEndsAt + minutes * 60_000);
   }
   function addFocusMinute() { addFocusMinutes(1); }
   function toggleTimer() {
     if (timerRunning) {
-      focusSeconds = Math.max(0, Math.ceil((timerEndsAt - Date.now()) / 1000)); timerRunning = false;
+      const remaining = Math.ceil((timerEndsAt - Date.now()) / 1000);
+      if (remaining <= 0) return;
+      focusSeconds = remaining;
+      timerRunning = false;
+      setFocusDeadline(0);
     } else {
+      clearFocusAlert();
       if (!focusSeconds) { focusSeconds = focusMinutes * 60; focusTotalSeconds = focusSeconds; }
-      timerEndsAt = Date.now() + focusSeconds * 1000; timerRunning = true;
+      setFocusDeadline(Date.now() + focusSeconds * 1000);
+      timerRunning = true;
     }
   }
   function keydown(event: KeyboardEvent) {
@@ -708,12 +801,6 @@
     }
   }
   onMount(() => {
-    void invoke<{automaticPaste: boolean; shortcutMode?: typeof shortcutMode}>('get_platform_capabilities')
-      .then(capabilities => {
-        automaticPaste = capabilities.automaticPaste;
-        shortcutMode = capabilities.shortcutMode ?? 'windows';
-      })
-      .catch(() => {});
     const appearanceSettings = loadAppearance();
     appearance = appearanceSettings.style;
     liquidEnabled = appearanceSettings.liquid;
@@ -728,6 +815,9 @@
     let unlistenMedia: UnlistenFn | undefined;
     let unlistenReminders: UnlistenFn | undefined;
     let unlistenAudio: UnlistenFn | undefined;
+    let unlistenPanel: UnlistenFn | undefined;
+    let unlistenFocus: UnlistenFn | undefined;
+    let unlistenShortcut: UnlistenFn | undefined;
     const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
     reducedMotion = motionQuery.matches;
     presence = createPresence(shell, () => reducedMotion);
@@ -740,9 +830,28 @@
       },
     });
     refresh();
+    void refreshMedia();
     void refreshWeather();
     void (async () => {
       try {
+        const stopShortcut = await listen<string | null>('island-shortcut', event => {
+          nativeShortcutLabel = event.payload;
+        });
+        if (disposed) { stopShortcut(); return; }
+        unlistenShortcut = stopShortcut;
+        const capabilities = await invoke<{
+          automaticPaste: boolean;
+          musicAppBinding?: boolean;
+          shortcutLabel?: string | null;
+          shortcutMode?: ShortcutMode;
+        }>('get_platform_capabilities').catch(() => null);
+        if (disposed) return;
+        if (capabilities) {
+          automaticPaste = capabilities.automaticPaste;
+          musicAppBinding = capabilities.musicAppBinding ?? false;
+          shortcutMode = capabilities.shortcutMode ?? 'windows';
+          if (capabilities.shortcutLabel !== undefined) nativeShortcutLabel = capabilities.shortcutLabel;
+        }
         const stopAudio = await listen<AudioFrame>('island-audio', event => liquid?.setAudio(event.payload));
         if (disposed) { stopAudio(); return; }
         unlistenAudio = stopAudio;
@@ -753,19 +862,19 @@
         if (disposed) { stopReminders(); return; }
         unlistenReminders = stopReminders;
         unlistenMedia = await listen<MediaState>('media-changed', event => {
+          const result = event.payload;
+          if (result.preference !== undefined && result.preference !== preferredMedia) return;
           lastMediaEvent = Date.now();
-          // Native snapshots already use the selected source and fall back when
-          // it closes. Accept that fallback so a paused cover cannot linger.
           mediaRequest++;
           mediaLoading = false;
-          media = event.payload;
+          media = result;
           mediaError = '';
           if (!media.session_id || !media.title.trim()) {
             volumeOpen = false; coverVolumeOpen = false;
             if (compactMode === 'track' && !expanded) compactMode = 'manual';
           }
         });
-        const stop = await listen<number | {generation: number; reason: 'manual' | 'track' | 'hourly' | 'startup'}>('island-reveal', event => { void revealFromShortcut(event.payload); });
+        const stop = await listen<IslandReveal>('island-reveal', event => { void revealFromShortcut(event.payload); });
         if (disposed) { stop(); return; }
         unlisten = stop;
         const stopToggle = await listen('island-toggle', () => { void toggleFromShortcut(); });
@@ -774,9 +883,18 @@
         unlisten = () => { stopReveal(); stopToggle(); };
         try { widgetSettings = await invoke<WidgetSettings>('get_widget_settings'); }
         catch (err) { settingsError = String(err); }
+        const stopPanel = await listen<number>('island-panel-height', event => {
+          panelOffset = event.payload;
+          if (expanded) void resizeDashboard(tab === 'calendar' && calendarPlanner);
+        });
+        if (disposed) { stopPanel(); return; }
+        unlistenPanel = stopPanel;
+        const stopFocus = await listen<number>('focus-timer-finished', event => finishFocus(event.payload));
+        if (disposed) { stopFocus(); return; }
+        unlistenFocus = stopFocus;
         await invoke('set_island_appearance', {portrait:appearance === 'portrait'});
         if (disposed) return;
-        await invoke('register_island_shortcut');
+        panelOffset = await invoke<number>('register_island_shortcut') || 0;
         shortcutReady = true;
       } catch (err) {
         if (disposed) return;
@@ -796,16 +914,16 @@
       if (!activeReminder) void presentNextReminder();
       if (timerRunning) {
         focusSeconds = Math.max(0, Math.ceil((timerEndsAt - Date.now()) / 1000));
-        if (!focusSeconds) { timerRunning = false; announce('Время сделать перерыв'); }
       }
     }, 1_000);
     return () => {
-      disposed = true; reminderVersion++; unlisten?.(); unlistenPointer?.(); unlistenMedia?.(); unlistenReminders?.(); unlistenAudio?.();
+      disposed = true; reminderVersion++; unlisten?.(); unlistenPointer?.(); unlistenMedia?.(); unlistenReminders?.(); unlistenAudio?.(); unlistenPanel?.(); unlistenFocus?.(); unlistenShortcut?.();
       void invoke('set_audio_reactivity', {enabled:false}).catch(() => {});
       transition++; presentationVersion++; taskRequest++; clearInterval(reload); clearInterval(clock);
       mediaRequest++; clearInterval(mediaPoll); presence?.reset();
       weatherRequest++; clearInterval(weatherPoll);
       clearTimeout(collapseTimer); clearTimeout(announceTimer); clearTimeout(revealTimer);
+      clearTimeout(focusAlertTimer);
       clearTimeout(overlayTimer); viewAnimation?.cancel();
       clearTimeout(highlightTimer);
       motionQuery.removeEventListener('change', motionChange); liquid?.destroy();
@@ -816,13 +934,22 @@
 <svelte:head><title>Personal Island</title><meta name="description" content="Задачи и время для фокуса — в одном островке." /></svelte:head>
 <svelte:window on:keydown={keydown} on:focusin={syncShortcutEditing} on:focusout={syncShortcutEditing} on:focus={syncShortcutEditing} on:blur={syncShortcutEditing}/>
 
+{#snippet focusAlertMessage()}
+  <Timer size={23} aria-hidden="true"/>
+  <span><strong>Фокус завершён</strong><small>Время сделать перерыв</small></span>
+{/snippet}
+
 <div class="island-shell" class:expanded class:dismissing class:capri-compact={capriCompact} class:capri-theme={appearance === 'portrait'} class:concealed={!visible} aria-hidden={!visible} inert={!visible} data-shortcut-ready={shortcutReady} data-native-hover={nativeHovered} data-presentation={JSON.stringify({dismissing, revealUntil, nativeOutsideSince, showForm, editId, deleteId, busy, pinned, settingsOpen, shortcutEditing, activeGeneration, presentationVersion})} bind:this={shell}>
-  <canvas class="liquid-surface" bind:this={canvas} aria-hidden="true"></canvas>
+  <canvas class="liquid-surface" style:scale={panelOffset && !expanded ? Math.min(1, panelOffset / compactHeight) : 1} bind:this={canvas} aria-hidden="true"></canvas>
   <div class="island-interaction" bind:this={interaction} on:mouseenter={pointerEnter} on:mouseleave={pointerLeave}
     on:mousemove={event => liquid?.pointer(event.clientX, event.clientY)} role="presentation">
-    <div class="compact-stage" class:invisible={expanded} class:wide={compactMode !== 'manual'} style:width={`${compactWidth}px`} style:height={`${compactHeight}px`} aria-hidden={expanded} inert={expanded}>
+    <div class="compact-stage" class:invisible={expanded} class:wide={compactMode !== 'manual'} style:scale={panelOffset && !expanded ? Math.min(1, panelOffset / compactHeight) : 1} style:width={`${compactWidth}px`} style:height={`${compactHeight}px`} aria-hidden={expanded} inert={expanded}>
     {#if activeReminder}
       {#key reminderKey(activeReminder)}<ReminderNotice task={activeReminder} phase={reminderPhase} remaining={reminderQueue.length} leaving={reminderClosing} open={() => void dismissReminder(true)} dismiss={() => void dismissReminder()} hover={value => reminderHovered = value}/>{/key}
+    {:else if compactFocusAlert}
+      <button class="focus-timer-alert focus-timer-compact" on:click={openDashboard} aria-live="polite">
+        {@render focusAlertMessage()}
+      </button>
     {:else if reviewedTask}
       <ReminderReview task={reviewedTask} {now} count={reviewItems.length} index={reviewIndex % reviewItems.length} taskCount={openTasks.length} {weather} open={() => void openReviewedTask()} next={() => nextReview(true)}/>
     {:else if capriMode}
@@ -857,7 +984,7 @@
       </button>
     {/if}
     </div>
-    <main class="dashboard" class:calendar-dashboard={tab === 'calendar'} class:visible={expanded} style={`--panel-width:${panelWidth}px;--panel-height:${panelHeight}px`} aria-busy={layoutBusy} aria-hidden={!expanded} inert={!expanded}>
+    <main class="dashboard" class:calendar-dashboard={tab === 'calendar'} class:visible={expanded} style={`--panel-width:${panelWidth}px;--panel-height:${panelHeight}px;top:${panelOffset}px`} aria-busy={layoutBusy} aria-hidden={!expanded} inert={!expanded}>
       <header class="header">
         <nav class="tabs" aria-label="Фильтр задач">{#each tabs as item}<button class:active={tab === item.id} aria-label={item.label} aria-current={tab === item.id ? 'page' : undefined} title={item.label} on:click={() => selectTab(item.id)}><svelte:component this={item.icon} size={17} strokeWidth={1.8}/><span>{item.label}</span></button>{/each}</nav>
         <div class="header-actions">
@@ -866,6 +993,9 @@
           <button class="icon-button collapse-button" aria-label="Свернуть" title="Свернуть · Esc" on:click={collapse}><ChevronDown size={18}/></button>
         </div>
       </header>
+      {#if focusAlert}
+        <div class="focus-timer-alert focus-timer-banner" role="status">{@render focusAlertMessage()}</div>
+      {/if}
       {#if activeReminder}<ReminderNotice task={activeReminder} phase={reminderPhase} remaining={reminderQueue.length} leaving={reminderClosing} inline open={() => void dismissReminder(true)} dismiss={() => void dismissReminder()} hover={value => reminderHovered = value}/>{/if}
       {#if settingsOpen}
         <div class="settings-panel">
@@ -874,17 +1004,17 @@
           <label><span>Жидкий край</span><input type="checkbox" checked={liquidEnabled} on:change={event => updateAppearance(appearance, event.currentTarget.checked)}/></label>
           <label><span>Эквалайзер музыки</span><input type="checkbox" checked={equalizerEnabled} on:change={event => updateAppearance(appearance, liquidEnabled, event.currentTarget.checked)}/></label>
           {#if appearanceError}<p class="appearance-error" role="status">{appearanceError}</p>{/if}
-          <WidgetPreferences settings={widgetSettings} save={saveWidgetSettings} busy={settingsBusy} error={settingsError} {shortcutMode}/>
+          <WidgetPreferences settings={widgetSettings} save={saveWidgetSettings} busy={settingsBusy} error={settingsError} {shortcutMode} systemShortcut={shortcutLabel}/>
           <button class="exit-button" aria-label="Выход" on:click={exitApp}><Power size={15}/> Завершить приложение</button>
         </div>
       {/if}
       <div class="view-stage" bind:this={viewStage}>
       {#if tab === 'home'}
-        <HomePanel active={expanded && visible} {tasks} {now} {media} {mediaError} {weather} {focusSeconds} {focusTotalSeconds} {timerRunning} {widgetSettings} {pinned} {reducedMotion} {mediaBusy} navigate={selectTab} createTask={openComposer} toggleFocus={toggleTimer} addMinute={addFocusMinute} resetFocus={() => setFocusMinutes(focusMinutes)} mediaCommand={compactCommand} playMusic={playFromHome} openSettings={() => settingsOpen = true}/>
+        <HomePanel active={expanded && visible} {tasks} {now} {media} {mediaError} {weather} {focusSeconds} {focusTotalSeconds} {timerRunning} {shortcutLabel} {widgetSettings} {pinned} {reducedMotion} {mediaBusy} musicApp={homeMusicApp} navigate={selectTab} createTask={openComposer} toggleFocus={toggleTimer} addMinute={addFocusMinute} resetFocus={() => setFocusMinutes(focusMinutes)} mediaCommand={compactCommand} playMusic={playFromHome} openSettings={() => settingsOpen = true}/>
       {:else if tab === 'clipboard'}
         <ClipboardPanel paste={pasteClipboard} {automaticPaste}/>
       {:else if tab === 'music'}
-        <MusicPanel {media} {mediaError} bind:preferred={preferredMedia} refresh={refreshMedia}/>
+        <MusicPanel {media} {mediaError} {musicAppBinding} preferred={preferredMedia} selectSource={selectMediaSource} refresh={refreshMedia}/>
       {:else if tab === 'weather'}
         <WeatherPanel {weather} {now} loading={weatherLoading} refresh={refreshWeather}/>
       {:else if tab === 'calendar'}
@@ -929,7 +1059,7 @@
         <aside class="focus-panel" class:reminders-only={tab !== 'today'}>
           {#if tab === 'today'}
           <div class="focus-top"><div class="timer-dial" class:timer-active={timerRunning}><svg viewBox="0 0 104 104" aria-hidden="true"><circle class="timer-track" cx="52" cy="52" r="46"/><circle class="timer-progress" cx="52" cy="52" r="46" pathLength="1" stroke-dasharray="1" stroke-dashoffset={1 - timerProgress}/></svg><span class="timer-value">{countdown(focusSeconds)}</span></div><div class="timer-actions"><button class="timer-toggle" aria-label={timerRunning ? 'Приостановить таймер' : 'Запустить таймер'} title={timerRunning ? 'Пауза' : 'Начать фокус'} on:click={toggleTimer}>{#if timerRunning}<Pause size={15} fill="currentColor"/>Пауза{:else}<Play size={15} fill="currentColor"/>Старт{/if}</button><div class="timer-secondary"><button aria-label="Добавить минуту" on:click={addFocusMinute}>+1 мин</button><button class="timer-reset" aria-label="Сбросить таймер" title="Сбросить" on:click={() => setFocusMinutes(focusMinutes)}>Сброс</button></div></div></div>
-          <div class="focus-caption">{timerRunning ? `до ${new Date(now.getTime()+focusSeconds*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}` : 'Таймер'} · всего {Math.round(focusTotalSeconds/60)} мин</div>
+          <div class="focus-caption">{timerRunning ? `до ${new Date(timerEndsAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}` : focusSeconds === 0 ? 'Завершён' : 'Таймер'} · всего {Math.round(focusTotalSeconds/60)} мин</div>
           <div class="timer-presets">{#each [15, 25, 45] as minutes}<button class:active={focusMinutes === minutes} aria-pressed={focusMinutes === minutes} on:click={() => setFocusMinutes(minutes)}>{minutes} мин</button>{/each}</div>
           <TimerDuration minutes={focusMinutes} total={focusTotalSeconds} set={setFocusMinutes} add={addFocusMinutes}/>
           {/if}

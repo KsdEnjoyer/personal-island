@@ -56,6 +56,9 @@
 <section class="widget-preferences" aria-label="Клавиши и автопоказ">
   {#if shortcutMode === 'portal'}
     <div class="preference-heading"><span>Показать / скрыть{systemShortcut ? ` · ${systemShortcut}` : ''}</span><button disabled={busy} on:click={configurePortal}>Настроить в системе</button></div>
+    {#if !systemShortcut}
+      <p class="preference-note">Системное сочетание не назначено. Открой Personal Island из меню приложений или назначь его запуск в настройках клавиатуры.</p>
+    {/if}
   {:else}
   <div class="preference-heading"><span>Показать / скрыть</span><button disabled={busy} on:click={() => save({...settings, shortcut: {...(shortcutMode === 'windows' ? defaultShortcut : linuxDefaultShortcut)}})}>Сбросить</button></div>
   <input class="shortcut-recorder" readonly aria-label="Сочетание для показа островка" aria-busy={busy} value={capturing ? 'Нажми новое сочетание…' : shortcutLabel(settings.shortcut)} disabled={busy}

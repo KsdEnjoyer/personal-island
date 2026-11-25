@@ -1,24 +1,68 @@
 //! Linux media control through MPRIS (via playerctl).
+use ashpd::{
+    zbus,
+    zvariant::{ObjectPath, OwnedValue},
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     env,
     io::{Cursor, Read},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MusicApp {
+    YandexMusic,
+    #[serde(rename = "spotify-app")]
+    Spotify,
+}
+
+impl MusicApp {
+    const ALL: [Self; 2] = [Self::YandexMusic, Self::Spotify];
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::YandexMusic => "yandex-music",
+            Self::Spotify => "spotify-app",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::YandexMusic => "Яндекс Музыка",
+            Self::Spotify => "Spotify",
+        }
+    }
+
+    fn matches_desktop_entry(self, name: &str) -> bool {
+        match self {
+            Self::YandexMusic => is_yandex_music_player(name),
+            Self::Spotify => matches!(
+                name.to_ascii_lowercase().as_str(),
+                "spotify.desktop" | "com.spotify.client.desktop" | "spotify_spotify.desktop"
+            ),
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct MediaSource {
     id: String,
     label: String,
+    app: Option<MusicApp>,
 }
 #[derive(Serialize, Default, Clone)]
 pub struct MediaState {
     sessions: Vec<MediaSource>,
+    preference: Option<String>,
+    available_apps: Vec<MusicApp>,
     session_id: Option<String>,
     source: String,
     title: String,
@@ -44,10 +88,13 @@ struct NotificationState {
 }
 
 fn playerctl(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("playerctl")
-        .args(args)
-        .output()
-        .map_err(|error| format!("Не удалось запустить playerctl: {error}"))?;
+    let output = match Command::new("playerctl").args(args).output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && args == ["--list-all"] => {
+            return Ok(String::new());
+        }
+        Err(error) => return Err(format!("Не удалось запустить playerctl: {error}")),
+    };
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -55,38 +102,102 @@ fn playerctl(args: &[&str]) -> Result<String, String> {
 }
 
 const MPRIS_PLAYER: &str = "org.mpris.MediaPlayer2.Player";
+const MPRIS_NO_TRACK: &str = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
 
-fn mpris_call(id: &str, method: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--timeout",
-            "2",
-            "--dest",
-            &format!("org.mpris.MediaPlayer2.{id}"),
-            "--object-path",
-            "/org/mpris/MediaPlayer2",
-            "--method",
-            method,
-        ])
-        .args(args)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+async fn mpris_player<'a>(
+    connection: &zbus::Connection,
+    id: &'a str,
+) -> Result<zbus::Proxy<'a>, zbus::Error> {
+    zbus::Proxy::new(
+        connection,
+        format!("org.mpris.MediaPlayer2.{id}"),
+        "/org/mpris/MediaPlayer2",
+        MPRIS_PLAYER,
+    )
+    .await
 }
 
-fn can_seek(id: &str) -> bool {
-    mpris_call(
+#[derive(Default)]
+struct TrackMetadata {
+    title: String,
+    artist: String,
+    artwork: String,
+    length_micros: i64,
+    can_seek: bool,
+}
+
+fn metadata_text<'a>(values: &'a HashMap<String, OwnedValue>, key: &str) -> &'a str {
+    values
+        .get(key)
+        .and_then(|value| <&str>::try_from(value).ok())
+        .unwrap_or_default()
+}
+
+fn track_path(values: &HashMap<String, OwnedValue>) -> Option<ObjectPath<'_>> {
+    let value = values.get("mpris:trackid")?;
+    // Some players return the path as a string rather than an object path.
+    let path = <&ObjectPath>::try_from(value)
+        .cloned()
+        .ok()
+        .or_else(|| ObjectPath::try_from(<&str>::try_from(value).ok()?).ok())?;
+    (path.as_str() != MPRIS_NO_TRACK && path.as_str() != "/").then_some(path)
+}
+
+fn track_length(values: &HashMap<String, OwnedValue>) -> i64 {
+    values
+        .get("mpris:length")
+        .and_then(|value| i64::try_from(value).ok())
+        .unwrap_or_default()
+}
+
+async fn mpris_metadata(id: &str) -> Result<TrackMetadata, zbus::Error> {
+    let connection = zbus::Connection::session().await?;
+    let player = mpris_player(&connection, id).await?;
+    let values: HashMap<String, OwnedValue> = player.get_property("Metadata").await?;
+    let length_micros = track_length(&values);
+    let artist = values
+        .get("xesam:artist")
+        .and_then(|value| value.try_clone().ok())
+        .and_then(|value| Vec::<String>::try_from(value).ok())
+        .map(|artists| artists.join(", "))
+        .unwrap_or_else(|| metadata_text(&values, "xesam:artist").to_owned());
+    Ok(TrackMetadata {
+        title: metadata_text(&values, "xesam:title").to_owned(),
+        artist,
+        artwork: metadata_text(&values, "mpris:artUrl").to_owned(),
+        length_micros,
+        can_seek: length_micros > 0
+            && track_path(&values).is_some()
+            && player.get_property("CanSeek").await.unwrap_or(false),
+    })
+}
+
+fn track_metadata(id: &str) -> TrackMetadata {
+    let result = tauri::async_runtime::block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), mpris_metadata(id)).await
+    });
+    if let Ok(Ok(metadata)) = result {
+        return metadata;
+    }
+    let metadata = playerctl(&[
+        "-p",
         id,
-        "org.freedesktop.DBus.Properties.Get",
-        &[MPRIS_PLAYER, "CanSeek"],
-    )
-    .as_deref()
-        == Ok("(<true>,)")
+        "metadata",
+        "--format",
+        "{{xesam:title}}\u{1f}{{xesam:artist}}\u{1f}{{mpris:artUrl}}\u{1f}{{mpris:length}}",
+    ])
+    .unwrap_or_default();
+    let mut fields = metadata.split('\u{1f}');
+    TrackMetadata {
+        title: fields.next().unwrap_or_default().to_owned(),
+        artist: fields.next().unwrap_or_default().to_owned(),
+        artwork: fields.next().unwrap_or_default().to_owned(),
+        length_micros: fields
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default(),
+        ..Default::default()
+    }
 }
 
 #[tauri::command]
@@ -94,48 +205,36 @@ pub async fn seek_media(session_id: String, position: f64, title: String) -> Res
     if !position.is_finite() || position < 0.0 {
         return Err("Некорректная позиция трека.".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        if !can_seek(&session_id) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let connection = zbus::Connection::session()
+            .await
+            .map_err(|error| error.to_string())?;
+        let player = mpris_player(&connection, &session_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !player.get_property("CanSeek").await.unwrap_or(false) {
             return Err("Перемотка недоступна в этом плеере.".into());
         }
-        let metadata = playerctl(&[
-            "-p",
-            &session_id,
-            "metadata",
-            "--format",
-            "{{mpris:trackid}}\u{1f}{{mpris:length}}\u{1f}{{xesam:title}}",
-        ])?;
-        let mut fields = metadata.splitn(3, '\u{1f}');
-        let track = fields
-            .next()
-            .filter(|id| id.starts_with('/') && *id != "/org/mpris/MediaPlayer2/TrackList/NoTrack")
-            .ok_or("Плеер не предоставил идентификатор трека.")?;
-        let length = fields
-            .next()
-            .and_then(|value| value.parse::<i64>().ok())
-            .filter(|length| *length > 0)
-            .ok_or("Плеер не предоставил длительность трека.")?;
-        if fields.next().unwrap_or_default() != title {
+        let values: HashMap<String, OwnedValue> = player
+            .get_property("Metadata")
+            .await
+            .map_err(|error| error.to_string())?;
+        let track = track_path(&values).ok_or("Плеер не предоставил идентификатор трека.")?;
+        let length = track_length(&values);
+        if length <= 0 {
+            return Err("Плеер не предоставил длительность трека.".into());
+        }
+        if metadata_text(&values, "xesam:title") != title {
             return Err("Трек уже сменился. Попробуй перемотать ещё раз.".into());
         }
         let micros = ((position * 1_000_000.0).round() as i64).min(length);
-        mpris_call(
-            &session_id,
-            "org.mpris.MediaPlayer2.Player.SetPosition",
-            &[track, &micros.to_string()],
-        )?;
-        Ok(())
+        player
+            .call("SetPosition", &(track, micros))
+            .await
+            .map_err(|error| error.to_string())
     })
     .await
-    .map_err(|error| error.to_string())?
-}
-
-fn source_label(id: &str) -> String {
-    if is_yandex_music_player(id) {
-        "Яндекс Музыка".into()
-    } else {
-        id.split('.').next().unwrap_or(id).to_string()
-    }
+    .map_err(|_| "Плеер не ответил на перемотку.".to_string())?
 }
 
 fn is_yandex_music_player(id: &str) -> bool {
@@ -143,23 +242,86 @@ fn is_yandex_music_player(id: &str) -> bool {
     id.contains("yandex") && id.contains("music")
 }
 
-fn yandex_desktop_entry_in(dirs: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+fn yandex_music_session(id: &str) -> bool {
+    let application = id.split('.').next().unwrap_or(id);
+    if is_yandex_music_player(application) {
+        return true;
+    }
+    if !matches!(application, "chromium" | "chrome" | "electron") {
+        return false;
+    }
+    // Electron publishes a Chromium bus name even for the installed desktop app.
+    crate::volume::mpris_owner_pid(id)
+        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/exe")).ok())
+        .and_then(|path| path.file_name()?.to_str().map(is_yandex_music_player))
+        .unwrap_or(false)
+}
+
+fn media_sources() -> Result<Vec<MediaSource>, String> {
+    let ids = match playerctl(&["--list-all"]) {
+        Ok(ids) => ids,
+        Err(error) if error.is_empty() || error == "No players found" => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    Ok(ids
+        .lines()
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            let name = id.split('.').next().unwrap_or(id);
+            let app = match name {
+                "spotify" => Some(MusicApp::Spotify),
+                _ if yandex_music_session(id) => Some(MusicApp::YandexMusic),
+                _ => None,
+            };
+            MediaSource {
+                id: id.into(),
+                label: app
+                    .map(|app| app.label().to_owned())
+                    .unwrap_or_else(|| name.to_owned()),
+                app,
+            }
+        })
+        .collect())
+}
+
+fn select_source<'a>(
+    sources: &'a [MediaSource],
+    preferred: Option<&str>,
+    is_playing: impl Fn(&str) -> bool,
+) -> Option<&'a MediaSource> {
+    let bound = MusicApp::ALL
+        .into_iter()
+        .find(|app| preferred == Some(app.id()));
+    sources
+        .iter()
+        .filter(|source| bound.is_none() || source.app == bound)
+        .min_by_key(|source| {
+            (
+                bound.is_none() && preferred.is_some_and(|id| id != source.id),
+                !is_playing(&source.id),
+                source.app.is_none(),
+            )
+        })
+}
+
+fn desktop_entry_in(app: MusicApp, dirs: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     dirs.into_iter().find_map(|dir| {
         std::fs::read_dir(dir.join("applications"))
             .ok()?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .find(|path| {
-                path.extension().is_some_and(|ext| ext == "desktop")
+                path.is_file()
+                    && path.extension().is_some_and(|ext| ext == "desktop")
                     && path
                         .file_name()
                         .and_then(|name| name.to_str())
-                        .is_some_and(is_yandex_music_player)
+                        .is_some_and(|name| app.matches_desktop_entry(name))
             })
     })
 }
 
-fn yandex_desktop_entry() -> Option<PathBuf> {
+fn desktop_entry(app: MusicApp) -> Option<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(data) = env::var_os("XDG_DATA_HOME") {
         dirs.push(PathBuf::from(data));
@@ -174,20 +336,30 @@ fn yandex_desktop_entry() -> Option<PathBuf> {
             .filter(|dir| !dir.is_empty())
             .map(PathBuf::from),
     );
-    yandex_desktop_entry_in(dirs)
+    if app == MusicApp::Spotify {
+        if let Some(home) = env::var_os("HOME") {
+            dirs.push(PathBuf::from(home).join(".local/share/flatpak/exports/share"));
+        }
+        dirs.extend([
+            PathBuf::from("/var/lib/flatpak/exports/share"),
+            PathBuf::from("/var/lib/snapd/desktop"),
+        ]);
+    }
+    desktop_entry_in(app, dirs)
 }
 
-fn launch_desktop_entry(path: &Path) -> Result<(), String> {
-    let output = Command::new("gio")
+fn launch_desktop_entry(app: MusicApp, path: &Path) -> Result<(), String> {
+    // The launched player can inherit gio's streams and keep captured pipes open.
+    let status = Command::new("gio")
         .arg("launch")
         .arg(path)
-        .output()
-        .map_err(|error| format!("Не удалось открыть Яндекс Музыку: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Не удалось открыть Яндекс Музыку: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("Не удалось открыть {}: {error}", app.label()))?;
+    if !status.success() {
+        return Err(format!("Не удалось открыть {}: {status}", app.label()));
     }
     Ok(())
 }
@@ -261,61 +433,41 @@ fn load_artwork(uri: &str) -> Option<String> {
 }
 
 fn snapshot(preferred: Option<String>) -> Result<MediaState, String> {
-    let ids = playerctl(&["--list-all"])?;
-    let mut ids: Vec<String> = ids
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
-    let sources = ids
-        .iter()
-        .map(|id| MediaSource {
-            id: id.clone(),
-            label: source_label(id),
+    let sources = media_sources()?;
+    let available_apps = MusicApp::ALL
+        .into_iter()
+        .filter(|app| {
+            sources.iter().any(|source| source.app == Some(*app)) || desktop_entry(*app).is_some()
         })
         .collect();
-    ids.sort_by_key(|id| {
-        (
-            preferred.as_deref() != Some(id.as_str()),
-            playerctl(&["-p", id, "status"]).as_deref() != Ok("Playing"),
-            !is_yandex_music_player(id),
-        )
+    let selected = select_source(&sources, preferred.as_deref(), |id| {
+        playerctl(&["-p", id, "status"]).as_deref() == Ok("Playing")
     });
-    let Some(id) = ids.first() else {
+    let Some(selected) = selected else {
         return Ok(MediaState {
             sessions: sources,
+            preference: preferred,
+            available_apps,
             ..Default::default()
         });
     };
+    let id = &selected.id;
     let status = playerctl(&["-p", id, "status"]).unwrap_or_default();
-    let metadata = playerctl(&[
-        "-p",
-        id,
-        "metadata",
-        "--format",
-        "{{xesam:title}}\u{1f}{{xesam:artist}}\u{1f}{{mpris:artUrl}}\u{1f}{{mpris:length}}",
-    ])
-    .unwrap_or_default();
-    let mut fields = metadata.split('\u{1f}');
-    let title = fields.next().unwrap_or_default().to_string();
-    let artist = fields.next().unwrap_or_default().to_string();
-    let art = fields.next().and_then(artwork);
-    let duration = fields
-        .next()
-        .and_then(|s| s.trim().parse::<f64>().ok())
-        .unwrap_or(0.0)
-        / 1_000_000.0;
+    let metadata = track_metadata(id);
+    let duration = metadata.length_micros.max(0) as f64 / 1_000_000.0;
+    let art = artwork(&metadata.artwork);
     let position = playerctl(&["-p", id, "position"])
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0);
     Ok(MediaState {
-        sessions: sources,
+        preference: preferred,
+        available_apps,
         session_id: Some(id.clone()),
-        source: source_label(id),
-        title,
-        artist,
+        source: selected.label.clone(),
+        sessions: sources,
+        title: metadata.title,
+        artist: metadata.artist,
         artwork: art,
         playing: status == "Playing",
         position,
@@ -323,7 +475,7 @@ fn snapshot(preferred: Option<String>) -> Result<MediaState, String> {
         can_toggle: status != "Stopped",
         can_previous: true,
         can_next: true,
-        can_seek: duration > 0.0 && can_seek(id),
+        can_seek: metadata.can_seek,
     })
 }
 
@@ -368,40 +520,85 @@ pub async fn media_command(
 }
 
 #[tauri::command]
-pub fn open_yandex_music() -> Result<(), String> {
-    if let Some(path) = yandex_desktop_entry() {
-        return launch_desktop_entry(&path);
+pub async fn open_yandex_music() -> Result<(), String> {
+    open_app(MusicApp::YandexMusic).await
+}
+
+#[tauri::command]
+pub async fn start_yandex_music() -> Result<MediaState, String> {
+    start_app(MusicApp::YandexMusic).await
+}
+
+#[tauri::command]
+pub async fn open_spotify() -> Result<(), String> {
+    open_app(MusicApp::Spotify).await
+}
+
+async fn open_app(app: MusicApp) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(path) = desktop_entry(app) {
+            return launch_desktop_entry(app, &path);
+        }
+        match app {
+            MusicApp::YandexMusic => Command::new("xdg-open")
+                .arg("https://music.yandex.ru/")
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            MusicApp::Spotify => raise_spotify(),
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn raise_spotify() -> Result<(), String> {
+    let player = media_sources()?
+        .into_iter()
+        .find(|source| source.app == Some(MusicApp::Spotify))
+        .ok_or("Установи и открой настольный Spotify.")?;
+    let status = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            &format!("org.mpris.MediaPlayer2.{}", player.id),
+            "--object-path",
+            "/org/mpris/MediaPlayer2",
+            "--method",
+            "org.mpris.MediaPlayer2.Raise",
+            "--timeout",
+            "5",
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !status.status.success() {
+        return Err("Открой окно Spotify из меню приложений.".into());
     }
-    Command::new("xdg-open")
-        .arg("https://music.yandex.ru/")
-        .spawn()
-        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn start_yandex_music(app: tauri::AppHandle) -> Result<MediaState, String> {
-    let state = tauri::async_runtime::spawn_blocking(start_yandex_playback)
-        .await
-        .map_err(|e| e.to_string())??;
-    *app.state::<MediaPreference>()
-        .0
-        .lock()
-        .map_err(|e| e.to_string())? = state.session_id.clone();
-    let _ = app.emit("media-changed", &state);
-    Ok(state)
+pub async fn start_spotify() -> Result<MediaState, String> {
+    start_app(MusicApp::Spotify).await
 }
 
-fn start_yandex_playback() -> Result<MediaState, String> {
+async fn start_app(app: MusicApp) -> Result<MediaState, String> {
+    tauri::async_runtime::spawn_blocking(move || start_playback(app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn start_playback(app: MusicApp) -> Result<MediaState, String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut launched = false;
     let mut next_play = Instant::now();
     while Instant::now() < deadline {
-        let player = playerctl(&["--list-all"])
+        let player = media_sources()
             .unwrap_or_default()
-            .lines()
-            .find(|id| is_yandex_music_player(id))
-            .map(str::to_owned);
+            .into_iter()
+            .find(|source| source.app == Some(app))
+            .map(|source| source.id);
         if let Some(id) = player {
             let state = snapshot(Some(id.clone()))?;
             if state.session_id.as_deref() == Some(id.as_str()) && state.playing {
@@ -413,15 +610,21 @@ fn start_yandex_playback() -> Result<MediaState, String> {
                 next_play = Instant::now() + Duration::from_secs(1);
             }
         } else if !launched {
-            let path = yandex_desktop_entry().ok_or(
-                "Установи настольную Яндекс Музыку с music.yandex.ru/download/ и войди в аккаунт. Кнопка «Яндекс Музыка» открывает сайт.",
-            )?;
-            launch_desktop_entry(&path)?;
+            let path = desktop_entry(app).ok_or_else(|| {
+                format!(
+                    "Установи настольное приложение «{}» и войди в аккаунт.",
+                    app.label()
+                )
+            })?;
+            launch_desktop_entry(app, &path)?;
             launched = true;
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    Err("Яндекс Музыка открыта, но MPRIS не сообщил о воспроизведении. Проверь вход в аккаунт и очередь треков, затем нажми Play ещё раз.".into())
+    Err(format!(
+        "В «{}» не началось воспроизведение. Проверь вход в аккаунт и включи трек в приложении.",
+        app.label()
+    ))
 }
 
 pub async fn watch(app: tauri::AppHandle) {
@@ -473,6 +676,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn yandex_binding_follows_new_sessions_without_using_the_browser() {
+        let browser = MediaSource {
+            id: "chromium.instance11".into(),
+            label: "chromium".into(),
+            app: None,
+        };
+        let yandex = MediaSource {
+            id: "chromium.instance22".into(),
+            label: "Яндекс Музыка".into(),
+            app: Some(MusicApp::YandexMusic),
+        };
+        let spotify = MediaSource {
+            id: "spotify.instance33".into(),
+            label: "Spotify".into(),
+            app: Some(MusicApp::Spotify),
+        };
+        let sources = [browser, yandex, spotify];
+        let is_playing = |id: &str| id == "chromium.instance11";
+        let pinned = Some(MusicApp::YandexMusic.id());
+        assert!(select_source(&sources[..1], pinned, is_playing).is_none());
+        assert_eq!(
+            select_source(&sources, pinned, is_playing).unwrap().id,
+            sources[1].id
+        );
+        assert_eq!(
+            select_source(&sources, None, is_playing).unwrap().id,
+            sources[0].id
+        );
+        let spotify_binding = Some(MusicApp::Spotify.id());
+        assert!(select_source(&sources[..2], spotify_binding, is_playing).is_none());
+        assert_eq!(
+            select_source(&sources, spotify_binding, is_playing)
+                .unwrap()
+                .id,
+            sources[2].id
+        );
+    }
+
+    #[test]
     fn desktop_entry_finds_yandex_music_without_matching_browser() {
         let root = tempfile::tempdir().unwrap();
         let applications = root.path().join("applications");
@@ -481,9 +723,15 @@ mod tests {
         let expected = applications.join("YandexMusic.desktop");
         std::fs::write(&expected, "").unwrap();
         assert_eq!(
-            yandex_desktop_entry_in([root.path().to_path_buf()]),
+            desktop_entry_in(MusicApp::YandexMusic, [root.path().to_path_buf()]),
             Some(expected)
         );
         assert!(!is_yandex_music_player("yandex-browser.instance123"));
+        let spotify = applications.join("com.spotify.Client.desktop");
+        std::fs::write(&spotify, "").unwrap();
+        assert_eq!(
+            desktop_entry_in(MusicApp::Spotify, [root.path().to_path_buf()]),
+            Some(spotify)
+        );
     }
 }

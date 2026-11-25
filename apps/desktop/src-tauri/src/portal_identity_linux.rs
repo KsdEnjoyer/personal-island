@@ -16,12 +16,12 @@ fn desktop_file_path(data_dir: PathBuf) -> PathBuf {
 }
 
 fn system_desktop_file_exists() -> bool {
-    let dirs =
-        std::env::var_os("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-    dirs.to_string_lossy()
-        .split(':')
-        .filter(|dir| !dir.is_empty())
-        .any(|dir| desktop_file_path(PathBuf::from(dir)).exists())
+    let dirs = std::env::var_os("XDG_DATA_DIRS")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    std::env::split_paths(&dirs)
+        .filter(|dir| dir.is_absolute())
+        .any(|dir| desktop_file_path(dir).is_file())
 }
 
 fn ensure_desktop_file() -> Result<(), String> {
@@ -30,6 +30,7 @@ fn ensure_desktop_file() -> Result<(), String> {
     }
     let data_dir = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
         .ok_or("Не найден каталог пользователя для регистрации приложения")?;
     let path = desktop_file_path(data_dir);
@@ -74,9 +75,16 @@ pub async fn connection() -> Result<zbus::Connection, String> {
             &(APP_ID, HashMap::<String, zvariant::Value<'_>>::new()),
         )
         .await;
-    if let Err(error) = result {
-        // Older portals do not export Registry and derive the identity themselves.
-        if !error.to_string().contains("UnknownMethod") {
+    match result {
+        Ok(_) => {}
+        // Older portals derive the application identity themselves.
+        Err(zbus::Error::MethodError(name, _, _))
+            if matches!(
+                name.as_str(),
+                "org.freedesktop.DBus.Error.UnknownMethod"
+                    | "org.freedesktop.DBus.Error.UnknownInterface"
+            ) => {}
+        Err(error) => {
             return Err(format!(
                 "Не удалось зарегистрировать приложение в портале: {error}"
             ));
